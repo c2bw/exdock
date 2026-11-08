@@ -51,9 +51,15 @@ defmodule Exdock.DockerTest.Harness do
 
       eventually!(
         fn ->
-          case docker(context, ["info", "--format", "{{.ServerVersion}}"], 5) do
-            {version, 0} -> {:ok, version}
-            _ -> false
+          # Some Docker clients return success from `info --format` even when
+          # connecting failed. Require an actual server version before proceeding.
+          case docker(context, ["version", "--format", "{{.Server.Version}}"], 5) do
+            {version, 0} ->
+              version = String.trim(version)
+              if Regex.match?(~r/\A\d+\.\d+\.\d+[^\r\n]*\z/, version), do: {:ok, version}, else: false
+
+            _ ->
+              false
           end
         end,
         "nested Docker daemon readiness",

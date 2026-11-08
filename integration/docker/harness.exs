@@ -21,30 +21,31 @@ defmodule Exdock.DockerTest.Harness do
     context = %{id: id, daemon: id, artifacts: artifacts}
     System.at_exit(fn _ -> cleanup(context) end)
 
-    daemon =
-      host!(
-        [
-          "run",
-          "-d",
-          "--privileged",
-          "--name",
-          id,
-          "--label",
-          "#{@label}=#{id}",
-          "-e",
-          "DOCKER_TLS_CERTDIR=",
-          "-p",
-          "127.0.0.1::2375",
-          image,
-          "--host=tcp://0.0.0.0:2375",
-          "--host=unix:///var/run/docker.sock",
-          "--insecure-registry=127.0.0.1:5001"
-        ],
-        180
-      )
+    # Docker may print image-pull progress alongside the ID on first use.
+    # Address the container by its assigned name, not the merged command output.
+    host!(
+      [
+        "run",
+        "-d",
+        "--privileged",
+        "--name",
+        id,
+        "--label",
+        "#{@label}=#{id}",
+        "-e",
+        "DOCKER_TLS_CERTDIR=",
+        "-p",
+        "127.0.0.1::2375",
+        image,
+        "--host=tcp://0.0.0.0:2375",
+        "--host=unix:///var/run/docker.sock",
+        "--insecure-registry=127.0.0.1:5001"
+      ],
+      180
+    )
 
     try do
-      mapping = host!(["port", daemon, "2375/tcp"])
+      mapping = host!(["port", context.daemon, "2375/tcp"])
       [_, port] = String.split(mapping, ":")
       context = Map.put(context, :endpoint, "http://127.0.0.1:#{port}")
 

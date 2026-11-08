@@ -1,0 +1,30 @@
+services:
+  server:
+    image: ghcr.io/c2bw/exdock:latest
+    container_name: exdock
+    labels:
+      exdock.protected: "true"
+    restart: unless-stopped
+    environment:
+      SECRET_KEY_BASE: "${SECRET_KEY_BASE:?You must set the SECRET_KEY_BASE environment variable}" #Secret key used by Phoenix to encrypt session data. It should be unique for each node.
+      PHX_HOST: "exdock.example.com" #The host that the Phoenix app will be accessible from. Use either the domain or the IP address (example: 192.168.1.50).
+      #TRUSTED_ORIGINS: "https://example1.com,https://example2.com" #OPTIONAL: needed if you want to allow users to access the UI from multiple domains.
+      PORT: "4000" #The port that the Phoenix app will be accessible from.
+      DATABASE_PATH: "/data/db/exdock.db" #The image default; override this only when mounting a different writable path.
+      DB_VAULT_KEY: "${DB_VAULT_KEY:?You must set the DB_VAULT_KEY environment variable}"
+      TCP_PORT: "${TCP_PORT:-5000}" #Change this if you want to use a different port for the TCP server.
+      AUTH_KEY: "${AUTH_KEY:?You must set the AUTH_KEY environment variable}" #The key used to authenticate clients connecting to the TCP server.
+      UI_EMAIL: "${UI_EMAIL:-admin@example.com}"
+      UI_PASSWORD: "${UI_PASSWORD:?You must set the UI_PASSWORD environment variable}" #The password used to log in to the web UI.
+      TZ: "Etc/UTC" # Optional Timezone
+      #LOKI_URL: "http://loki:3100" # Optional: URL of the Loki server.
+      #GITHUB_API_TOKEN: "apitoken" # Optional: Github API token for higher limits.
+    ports:
+      - "4000:4000" #Phoenix app port
+      - "${TCP_PORT:-5000}:${TCP_PORT:-5000}" #TCP server port
+    #network_mode: "host" # if you want to use the host network instead of port mapping
+    volumes:
+      - exdock_data:/data/db
+
+volumes:
+  exdock_data:

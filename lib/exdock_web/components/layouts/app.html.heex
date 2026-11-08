@@ -1,0 +1,18 @@
+<a
+  href="#app-content"
+  class="fixed left-4 top-3 z-[60] -translate-y-20 rounded-lg bg-primary-lighter px-4 py-2 text-sm font-semibold text-high-visibility shadow-lg ring-1 ring-primary transition-transform focus:translate-y-0"
+>
+  Skip to content
+</a>
+
+<div id="app-shell" class="relative min-h-dvh bg-primary text-high-visibility">
+  <ExdockWeb.Components.Navbar.render current_user={assigns[:current_user]} />
+  <div id="app-content" tabindex="-1" class="min-h-dvh outline-none">
+    <%= if assigns[:inner_block] do %>
+      {render_slot(@inner_block)}
+    <% else %>
+      {@inner_content}
+    <% end %>
+  </div>
+  <.flash_group flash={@flash} />
+</div>

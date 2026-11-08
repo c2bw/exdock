@@ -1,0 +1,9 @@
+# Keep repository text files stable across Windows and Linux.
+* text=auto eol=lf
+
+# Shell scripts and release shell templates must remain executable in Linux images.
+.gitattributes text eol=lf
+*.sh text eol=lf
+*.sh.eex text eol=lf
+rel/overlays/bin/server text eol=lf
+rel/overlays/bin/migrate text eol=lf

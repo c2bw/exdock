@@ -1,0 +1,93 @@
+name: Publish coordinated release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  # Running this on a branch validates and exports images without publishing.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: '29.0.4'
+          elixir-version: '1.20.2'
+      - name: Validate version and prepare release manifest
+        id: metadata
+        run: elixir scripts/release_metadata.exs "$RUNNER_TEMP/exdock-release"
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          (cd lib/exdock_client_runtime && mix deps.get)
+          (cd lib/exdock_client && mix deps.get)
+      - name: Verify source and publisher safeguards
+        run: |
+          python3 -m unittest discover -s test/release -p '*_test.py'
+          mix precommit
+          git diff --exit-code
+      - name: Test and export the production images
+        env:
+          EXDOCK_TEST_RELEASE_EXPORT_DIR: ${{ runner.temp }}/exdock-release
+          EXDOCK_IMAGE_VERSION: ${{ steps.metadata.outputs.version }}
+          EXDOCK_IMAGE_REVISION: ${{ steps.metadata.outputs.image_revision }}
+          EXDOCK_IMAGE_SOURCE: ${{ steps.metadata.outputs.source }}
+        run: |
+          mix test.release
+          cp compose.release.yml .env.example "$EXDOCK_TEST_RELEASE_EXPORT_DIR/"
+          python3 scripts/publish_release.py --check "$EXDOCK_TEST_RELEASE_EXPORT_DIR"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tested-release-images
+          path: ${{ runner.temp }}/exdock-release/
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: release-diagnostics
+          path: .docker-test-artifacts/
+          include-hidden-files: true
+          retention-days: 7
+
+  publish:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tested-release-images
+          path: ${{ runner.temp }}/exdock-release
+      - name: Authenticate to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish the tested pair and finalize the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish_release.py "$RUNNER_TEMP/exdock-release"
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io

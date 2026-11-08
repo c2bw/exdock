@@ -1,0 +1,14 @@
+services:
+  client:
+    image: ghcr.io/c2bw/exdock_client:latest
+    container_name: exdock_client
+    labels:
+      exdock.protected: "true"
+    restart: unless-stopped
+    environment:
+      NODE_NAME: "example_name" #The name of the node, identifies the node in the cluster.
+      SERVER_HOST: "localhost" #Exdock server's address
+      SERVER_PORT: 5000 #Exdock server's port
+      AUTH_KEY: "${AUTH_KEY:?AUTH_KEY is required}" #Must match the AUTH_KEY of the server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

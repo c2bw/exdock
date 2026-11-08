@@ -1,0 +1,56 @@
+<section id="login-page" class="flex min-h-dvh items-center justify-center px-5 pb-10 pt-20">
+  <div class="w-full max-w-md rounded-2xl border border-primary bg-primary-lighter p-7 shadow-2xl shadow-black/10 sm:p-9">
+    <div class="mb-8">
+      <div class="mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-eye ring-1 ring-primary">
+        <.icon name="hero-command-line" class="h-5 w-5" />
+      </div>
+      <h1 class="font-mono text-xl font-semibold tracking-tight text-high-visibility">Welcome back</h1>
+      <p class="mt-2 text-sm leading-6 text-low-visibility">Sign in to manage your Exdock cluster.</p>
+    </div>
+
+    <.simple_form
+      for={@form}
+      id="login-form"
+      action={~p"/users/log_in"}
+      bg_color="bg-transparent"
+      class="font-mono"
+    >
+      <.error :if={@error_message}>{@error_message}</.error>
+
+      <.input
+        field={@form[:email]}
+        type="email"
+        label="Email"
+        bg_color="bg-primary"
+        text_color="text-high-visibility"
+        required
+      />
+      <.input
+        field={@form[:password]}
+        type="password"
+        label="Password"
+        bg_color="bg-primary"
+        text_color="text-high-visibility"
+        required
+      />
+
+      <:actions>
+        <.input
+          field={@form[:remember_me]}
+          type="checkbox"
+          label="Keep me logged in"
+          bg_color="bg-primary"
+          text_color="text-mid-visibility"
+        />
+      </:actions>
+
+      <:actions>
+        <.button phx-disable-with="Logging in..." class="w-full" bg_color="bg-primary">
+          <span class="flex items-center justify-center gap-2">
+            Log in <.icon name="hero-arrow-right" class="h-4 w-4" />
+          </span>
+        </.button>
+      </:actions>
+    </.simple_form>
+  </div>
+</section>

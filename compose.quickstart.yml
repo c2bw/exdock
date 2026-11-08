@@ -1,0 +1,45 @@
+# Source-built, single-host installation. Run from the repository root:
+# docker compose -p exdock --env-file .env -f compose.quickstart.yml up -d --build
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: exdock-server:local
+    labels:
+      exdock.protected: "true"
+    restart: unless-stopped
+    environment:
+      PHX_HOST: "${PHX_HOST:-localhost}"
+      PORT: "4000"
+      TCP_PORT: "5000"
+      DATABASE_PATH: /data/db/exdock.db
+      SECRET_KEY_BASE: "${SECRET_KEY_BASE:?Set SECRET_KEY_BASE in .env}"
+      DB_VAULT_KEY: "${DB_VAULT_KEY:?Set DB_VAULT_KEY in .env}"
+      AUTH_KEY: "${AUTH_KEY:?Set AUTH_KEY in .env}"
+      UI_EMAIL: "${UI_EMAIL:?Set UI_EMAIL in .env}"
+      UI_PASSWORD: "${UI_PASSWORD:?Set UI_PASSWORD in .env}"
+      TZ: "${TZ:-Etc/UTC}"
+    ports:
+      - "127.0.0.1:${UI_PORT:-4000}:4000"
+    volumes:
+      - exdock_data:/data/db
+  client:
+    build:
+      context: .
+      dockerfile: lib/exdock_client/Dockerfile
+    image: exdock-agent:local
+    labels:
+      exdock.protected: "true"
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      NODE_NAME: "${NODE_NAME:-docker-host-1}"
+      SERVER_HOST: server
+      SERVER_PORT: "5000"
+      AUTH_KEY: "${AUTH_KEY:?Set AUTH_KEY in .env}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+volumes:
+  exdock_data:

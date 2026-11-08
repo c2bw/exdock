@@ -1,0 +1,75 @@
+name: Docker command release gate
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main, master]
+  workflow_dispatch:
+    inputs:
+      docker_image:
+        description: Docker-in-Docker image to verify
+        default: docker:29.8.1-dind
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  OTP_VERSION: '29.0.4'
+  ELIXIR_VERSION: '1.20.2'
+
+jobs:
+  precommit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            deps
+            _build
+          # Path dependencies can change types without changing a lockfile.
+          # Do not add broad restore-keys: they can reintroduce a stale PLT.
+          key: >-
+            precommit-v2-${{ runner.os }}-${{ runner.arch }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock', '**/mix.exs', 'build/**/*.exs', 'config/**/*.exs', 'lib/exdock_client/config/**/*.exs', 'lib/exdock_client/exdock_protocol/lib/**/*.ex', 'lib/exdock_client_runtime/lib/**/*.ex') }}
+      - run: |
+          mix deps.get
+          (cd lib/exdock_client_runtime && mix deps.get)
+          (cd lib/exdock_client && mix deps.get)
+      - name: Verify publisher safeguards
+        run: python3 -m unittest discover -s test/release -p '*_test.py'
+      - run: mix precommit
+
+  docker-release:
+    needs: precommit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EXDOCK_TEST_DIND_IMAGE: ${{ inputs.docker_image || 'docker:29.8.1-dind' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: |
+          mix deps.get
+          (cd lib/exdock_client_runtime && mix deps.get)
+          (cd lib/exdock_client && mix deps.get)
+      - run: mix test.release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: docker-command-diagnostics
+          path: .docker-test-artifacts/
+          include-hidden-files: true
+          retention-days: 7

@@ -76,6 +76,13 @@ against `release.json`. It uploads this tested pair as a seven-day Actions
 artifact. A separate job, with `contents: write` and `packages: write`, loads that
 same archive and pushes it to GHCR without rebuilding.
 
+Image identities use the SHA-256 digest of each image's original configuration
+bytes, which include its root filesystem layer digests. The publisher re-exports
+each loaded image to verify this content identity. This works across classic and
+containerd image stores, whose native `docker inspect` IDs can differ for the
+same exported image. `images.json` also retains the test daemon's native ID as
+`source_image_id`; published registry digests are recorded separately.
+
 For a GitHub repository `OWNER/REPOSITORY`, lowercased image references are:
 
 ```text

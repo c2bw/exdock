@@ -1,8 +1,11 @@
 import copy
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -50,6 +53,54 @@ class PublicationGuardsTest(unittest.TestCase):
     def test_accepts_the_exported_pair_and_rejects_a_rebuilt_image(self):
         self.validate()
         self.inspected["suite-agent:local"]["Id"] = "sha256:" + "d" * 64
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.validate()
+
+    def write_archive(self, path, configs):
+        manifest = []
+        with tarfile.open(path, "w") as archive:
+            for tag, config in configs.items():
+                identity = hashlib.sha256(config).hexdigest()
+                name = "blobs/sha256/" + identity
+                member = tarfile.TarInfo(name)
+                member.size = len(config)
+                archive.addfile(member, io.BytesIO(config))
+                manifest.append({"Config": name, "RepoTags": [tag], "Layers": []})
+            data = json.dumps(manifest).encode()
+            member = tarfile.TarInfo("manifest.json")
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+
+    def test_records_config_digests_and_preserves_native_test_ids(self):
+        configs = {image["local_tag"]: json.dumps({"rootfs": {"diff_ids": [kind]}}).encode()
+                   for kind, image in self.images.items()}
+        self.write_archive(self.directory / "images.tar", configs)
+        publisher.record_image_ids(self.directory)
+        recorded = json.loads((self.directory / "images.json").read_text())
+        for kind, image in recorded.items():
+            self.assertEqual(image["source_image_id"], self.images[kind]["id"])
+            self.assertEqual(image["id"], "sha256:" + hashlib.sha256(configs[image["local_tag"]]).hexdigest())
+
+    def test_loaded_image_identity_is_independent_of_native_store_id(self):
+        tag = "suite-server:local"
+        config = b'{"rootfs":{"diff_ids":["sha256:layer"]}}'
+        expected = "sha256:" + hashlib.sha256(config).hexdigest()
+        for native_id in ("sha256:index-digest", expected):
+            def run(*args, **kwargs):
+                if args[:3] == ("docker", "image", "inspect"):
+                    return json.dumps([self.inspected[tag] | {"Id": native_id}])
+                self.assertEqual(args[:3], ("docker", "image", "save"))
+                self.write_archive(Path(args[4]), {tag: config})
+            with patch.object(publisher, "run", side_effect=run):
+                self.assertEqual(publisher.inspect_image(tag)["Id"], expected)
+
+    def test_changed_rootfs_is_rejected_even_with_matching_labels(self):
+        tag = "suite-agent:local"
+        tested_config = b'{"rootfs":{"diff_ids":["sha256:tested-layer"]}}'
+        changed_config = b'{"rootfs":{"diff_ids":["sha256:different-layer"]}}'
+        self.images["agent"]["id"] = "sha256:" + hashlib.sha256(tested_config).hexdigest()
+        self.inspected[tag]["Id"] = "sha256:" + hashlib.sha256(changed_config).hexdigest()
+        self.write()
         with self.assertRaisesRegex(ValueError, "identity"):
             self.validate()
 

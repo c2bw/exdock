@@ -1,16 +1,44 @@
 #!/usr/bin/env python3
 """Publish the exported, tested image pair; --check validates without publishing."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import tarfile
+import tempfile
 
 
 def run(*args, capture=False):
     return subprocess.run(args, check=True, text=True,
                           stdout=subprocess.PIPE if capture else None).stdout
+
+
+def archive_image_ids(archive):
+    """Configuration digests identify image content across Docker image stores."""
+    with tarfile.open(archive) as contents:
+        manifest = json.load(contents.extractfile("manifest.json"))
+        identities = {}
+        for image in manifest:
+            config = contents.extractfile(image["Config"]).read()
+            identity = "sha256:" + hashlib.sha256(config).hexdigest()
+            for tag in image.get("RepoTags") or []:
+                if tag in identities:
+                    raise ValueError("Duplicate image tag in archive")
+                identities[tag] = identity
+        return identities
+
+
+def record_image_ids(directory):
+    images = json.loads((directory / "images.json").read_text())
+    identities = archive_image_ids(directory / "images.tar")
+    for kind in ("server", "agent"):
+        image = images[kind]
+        image["source_image_id"] = image["id"]
+        image["id"] = identities[image["local_tag"]]
+    (directory / "images.json").write_text(json.dumps(images, indent=2) + "\n")
 
 
 def validate(directory, inspect_image):
@@ -63,7 +91,15 @@ def require_publish_context(metadata, environment):
 
 
 def inspect_image(tag):
-    return json.loads(run("docker", "image", "inspect", tag, capture=True))[0]
+    image = json.loads(run("docker", "image", "inspect", tag, capture=True))[0]
+    # Containerd-backed stores expose an OCI index digest as Id, while classic
+    # stores expose a configuration digest. Re-export the loaded image and hash
+    # its original config bytes, which also bind its rootfs layer digests.
+    with tempfile.TemporaryDirectory(prefix="exdock-image-identity-") as directory:
+        archive = Path(directory) / "image.tar"
+        run("docker", "image", "save", "--output", str(archive), tag)
+        image["Id"] = archive_image_ids(archive)[tag]
+    return image
 
 
 def publish(directory, metadata, images):
@@ -123,8 +159,14 @@ def publish(directory, metadata, images):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--check", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true")
+    mode.add_argument("--record-image-identities", action="store_true",
+                      help="Record portable content identities from the tested image archive")
     args = parser.parse_args()
+    if args.record_image_identities:
+        record_image_ids(args.directory)
+        return
     if not args.check:
         # Reject branch events/dirty metadata before loading anything into Docker.
         require_publish_context(json.loads((args.directory / "release.json").read_text()), os.environ)

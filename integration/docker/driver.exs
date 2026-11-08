@@ -20,6 +20,12 @@ defmodule Exdock.DockerTest.Driver do
     )
 
     File.write!(Path.join(directory, "images.json"), JSON.encode!(images) <> "\n")
+
+    case System.cmd("python3", ["scripts/publish_release.py", "--record-image-identities", directory], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, status} -> raise "Recording exported image identities failed (#{status}): #{output}"
+    end
+
     File.cp!(Path.join(context.artifacts, "engine.txt"), Path.join(directory, "tested-engine.txt"))
     IO.puts("Exported passing production images to #{directory}")
   end

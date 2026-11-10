@@ -1,6 +1,6 @@
 defmodule Exdock.Protocol.Message do
   @moduledoc """
-  Constructors and validators for protocol-v4 map payloads.
+  Constructors and validators for NodeWire map payloads.
 
   Wire payloads intentionally contain no server-owned structs and no executable
   module/function references. Atom conversion is restricted to this static

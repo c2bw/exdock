@@ -4,7 +4,7 @@ Standalone client release for an Exdock node.
 
 The client connects to the Exdock server over SSL, authenticates with the shared
 `AUTH_KEY`, validates and loads a SHA-256-protected runtime bundle, and executes
-only protocol-v4 commands through the fixed `Exdock.AgentRuntime` entrypoint.
+only NodeWire commands through the fixed `Exdock.AgentRuntime` entrypoint.
 The server cannot request arbitrary module/function execution.
 
 ## Configuration

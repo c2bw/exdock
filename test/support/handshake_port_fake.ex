@@ -39,5 +39,8 @@ defmodule Exdock.Server.Connection.HandshakePortFake do
   end
 
   @impl true
-  def activate_handler(_context, _handler_pid), do: :ok
+  def activate_handler(%{owner: owner}, _handler_pid, max_frame_size) do
+    send(owner, {:activated, max_frame_size})
+    :ok
+  end
 end

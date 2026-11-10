@@ -1,10 +1,11 @@
 defmodule Exdock.Client.Connection.TCPClientTest do
   use ExUnit.Case, async: true
+  import Kernel, except: [send: 2]
 
   alias Exdock.Client.Connection.Session
   alias Exdock.Client.Connection.State
   alias Exdock.Client.Connection.TCPClient
-  alias Exdock.Protocol.{Contract, Message}
+  alias Exdock.Protocol.{Channel, Message}
 
   test "init keeps configured host as a charlist" do
     assert {:ok, state, {:continue, :connect}} =
@@ -14,42 +15,86 @@ defmodule Exdock.Client.Connection.TCPClientTest do
     assert state.session.phase == :disconnected
   end
 
-  test "malformed server frames become protocol errors without crashing the client" do
-    state = client_state(socket: :fake_socket)
+  test "negotiation completion sends the agent hello and schedules the next session tick" do
+    {client, server, done} = channels_before_client_establishment()
+    timer = make_ref()
 
-    assert {:noreply, ^state} = TCPClient.handle_info({:ssl, :fake_socket, <<3>>}, state)
-    assert_receive {:server_error, :malformed_message}
+    state =
+      client_state(:authenticating,
+        socket: :fake_socket,
+        wire: client,
+        transport: __MODULE__,
+        heartbeat_timer: timer,
+        client_name: "node-a",
+        auth_key: "token"
+      )
+
+    assert {:noreply, state} = TCPClient.handle_info({:ssl, :fake_socket, done}, state)
+    assert_receive {:wire, bytes}
+
+    assert {:ok, _, [{:hello, %{"node" => "node-a", "auth_token" => "token"}}]} =
+             Channel.feed(server, bytes, &capture/1)
+
+    assert {:noreply, ^state} = TCPClient.handle_info({:timeout, make_ref(), :wire_tick}, state)
+    assert {:noreply, updated} = TCPClient.handle_info({:timeout, timer, :wire_tick}, state)
+    assert is_reference(updated.heartbeat_timer)
+    refute updated.heartbeat_timer == timer
   end
 
-  test "legacy arbitrary RPC frames are rejected without execution" do
-    message = <<2, 12, :erlang.term_to_binary({__MODULE__, :raise_from_remote_call, [self()]})::binary>>
-    state = client_state(socket: :fake_socket)
-
-    assert {:noreply, ^state} = TCPClient.handle_info({:ssl, :fake_socket, message}, state)
-    assert_receive {:server_error, {:version_mismatch, :version_too_old}}
-    refute_receive {:remote_call_started, _pid}
-  end
-
-  test "commands execute through the runtime boundary stored in client state" do
+  test "a fragmented NodeWire command executes once after readiness" do
+    {client, server} = established_channels()
     command = Message.command("job-id", "container_start", ["container"])
-    frame = Contract.encode_term_frame(:command, command)
-    state = client_state(socket: :fake_socket, runtime_executor: __MODULE__)
+    assert {:ok, _, []} = Channel.send_event(server, {:command, command}, &capture/1)
+    assert_receive {:wire, <<prefix::binary-size(4), rest::binary>>}
 
-    assert {:noreply, ^state} = TCPClient.handle_info({:ssl, :fake_socket, frame}, state)
+    state = client_state(:ready, socket: :fake_socket, wire: client, transport: __MODULE__, runtime_executor: __MODULE__)
+    assert {:noreply, state} = TCPClient.handle_info({:ssl, :fake_socket, prefix}, state)
+    refute_received {:executed, _}
+    assert {:noreply, _state} = TCPClient.handle_info({:ssl, :fake_socket, rest}, state)
     assert_receive {:executed, ^command}
+    refute_received {:executed, _}
+  end
+
+  test "a command before readiness disconnects without execution" do
+    {client, server} = established_channels()
+    command = Message.command("job-id", "container_start", ["container"])
+    assert {:ok, _, []} = Channel.send_event(server, {:command, command}, &capture/1)
+    assert_receive {:wire, bytes}
+
+    state = client_state(:authenticating, socket: :fake_socket, wire: client, transport: __MODULE__, runtime_executor: __MODULE__)
+    assert {:noreply, state} = TCPClient.handle_info({:ssl, :fake_socket, bytes}, state)
+    assert state.socket == nil
+    assert state.wire == nil
+    refute_received {:executed, _}
+  end
+
+  test "an oversized result becomes a correlated terminal failure on the same session" do
+    {client, server} = established_channels()
+    state = client_state(:ready, socket: :fake_socket, wire: client, transport: __MODULE__)
+    data = String.duplicate("x", 1_048_577)
+    result = Message.result("job-id", "container_start", "node-a", data, nil)
+
+    assert {:noreply, state} = TCPClient.handle_cast({:client_message, {:result, result}}, state)
+    assert state.socket == :fake_socket
+    assert_receive {:wire, bytes}
+
+    assert {:ok, _, [{:result, %{"id" => "job-id", "data" => nil, "error" => error}}]} =
+             Channel.feed(server, bytes, &capture/1)
+
+    assert is_binary(error)
   end
 
   test "repeated disconnects keep a single reconnect timer" do
     state = client_state()
 
     assert {:noreply, disconnected_state} =
-             TCPClient.handle_info({:server_error, :temporary_failure}, state)
+             TCPClient.handle_info({:ssl_closed, state.socket}, state)
 
     assert is_reference(disconnected_state.reconnect_timer)
     assert disconnected_state.session.phase == :disconnected
 
     assert {:noreply, repeatedly_disconnected_state} =
-             TCPClient.handle_info({:server_error, :another_temporary_failure}, disconnected_state)
+             TCPClient.handle_info({:ssl_closed, state.socket}, disconnected_state)
 
     assert repeatedly_disconnected_state.reconnect_timer == disconnected_state.reconnect_timer
 
@@ -60,7 +105,7 @@ defmodule Exdock.Client.Connection.TCPClientTest do
     state = client_state()
 
     assert {:noreply, disconnected_state} =
-             TCPClient.handle_info({:server_error, :temporary_failure}, state)
+             TCPClient.handle_info({:ssl_closed, state.socket}, state)
 
     reconnect_timer = disconnected_state.reconnect_timer
     stale_timer = make_ref()
@@ -88,39 +133,16 @@ defmodule Exdock.Client.Connection.TCPClientTest do
     assert {:noreply, ^state} = TCPClient.handle_continue(:connect, state)
   end
 
-  test "stale runtime bundles cannot move a ready connection backwards" do
-    state = client_state(:ready, socket: :current_socket)
+  test "an authentication error closes the connection without scheduling reconnect" do
+    {client, server} = established_channels()
+    assert {:ok, _, []} = Channel.send_event(server, {:error, :invalid_auth}, &capture/1)
+    assert_receive {:wire, bytes}
 
-    assert {:noreply, ^state} =
-             TCPClient.handle_info(
-               {:runtime_bundle, %{"version" => "stale"}, :stale_socket},
-               state
-             )
-
-    assert {:noreply, ^state} =
-             TCPClient.handle_info(
-               {:runtime_bundle, %{"version" => "duplicate"}, :current_socket},
-               state
-             )
-  end
-
-  test "non-retriable server errors cancel a pending reconnect" do
-    state = client_state()
-
-    assert {:noreply, disconnected_state} =
-             TCPClient.handle_info({:server_error, :temporary_failure}, state)
-
-    reconnect_timer = disconnected_state.reconnect_timer
-
-    assert {:noreply, stopped_state} =
-             TCPClient.handle_info(
-               {:server_error, {:authentication_error, :invalid_auth}},
-               disconnected_state
-             )
-
+    state = client_state(:authenticating, socket: :fake_socket, wire: client, transport: __MODULE__)
+    assert {:noreply, stopped_state} = TCPClient.handle_info({:ssl, :fake_socket, bytes}, state)
     refute Session.reconnect_enabled?(stopped_state.session)
     assert stopped_state.reconnect_timer == nil
-    refute_received {:timeout, ^reconnect_timer, :try_reconnect}
+    assert stopped_state.socket == nil
   end
 
   defp client_state(attrs \\ []) when is_list(attrs),
@@ -131,8 +153,36 @@ defmodule Exdock.Client.Connection.TCPClientTest do
     State.new(Keyword.put(attrs, :session, session))
   end
 
+  defp established_channels do
+    {client, server, done} = channels_before_client_establishment()
+    assert {:ok, client, [:established]} = Channel.feed(client, done, &capture/1)
+    {client, server}
+  end
+
+  defp channels_before_client_establishment do
+    assert {:ok, client, []} = Channel.start(:client, &capture/1)
+    assert {:ok, server, []} = Channel.start(:server, &capture/1)
+    assert_receive {:wire, hello}
+    assert {:ok, server, []} = Channel.feed(server, hello, &capture/1)
+    assert_receive {:wire, select}
+    assert {:ok, client, []} = Channel.feed(client, select, &capture/1)
+    assert_receive {:wire, ready}
+    assert {:ok, server, [:established]} = Channel.feed(server, ready, &capture/1)
+    assert_receive {:wire, done}
+    {client, server, done}
+  end
+
+  def activate(_socket), do: :ok
+  def close(_socket), do: :ok
+  def send(:fake_socket, bytes), do: capture(bytes)
+
+  defp capture(bytes) do
+    Kernel.send(self(), {:wire, bytes})
+    :ok
+  end
+
   def execute(command) do
-    send(self(), {:executed, command})
+    Kernel.send(self(), {:executed, command})
     :ok
   end
 end

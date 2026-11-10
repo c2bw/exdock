@@ -3,7 +3,7 @@ defmodule Exdock.AgentRuntime.Wire do
   Converts Docker refresh snapshots into protocol-owned map shapes.
 
   The server reconstructs its internal client snapshot structures only after
-  validating the authenticated protocol-v4 result.
+  validating the authenticated NodeWire result.
   """
 
   alias Exdock.Protocol.Snapshot.{Container, Image}

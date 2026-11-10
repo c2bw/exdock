@@ -9,7 +9,7 @@ defmodule Exdock.Client.Connection.TimerTest do
 
     assert is_reference(heartbeat)
     assert is_reference(reconnect)
-    assert_receive :heartbeat
+    assert_receive {:timeout, ^heartbeat, :wire_tick}
     assert_receive {:timeout, ^reconnect, :try_reconnect}
   end
 
@@ -17,6 +17,6 @@ defmodule Exdock.Client.Connection.TimerTest do
     timer = Timer.heartbeat(60_000)
 
     assert is_integer(Timer.cancel(timer))
-    refute_receive :heartbeat
+    refute_receive {:timeout, ^timer, :wire_tick}
   end
 end

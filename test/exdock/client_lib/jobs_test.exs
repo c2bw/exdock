@@ -114,7 +114,7 @@ defmodule Exdock.ClientLib.JobsTest do
     assert data == %{"container" => "app", "warning" => warning}
 
     payload = Exdock.Protocol.Message.result("job-id", "container_recreate", "node-a", data, nil)
-    frame = Exdock.Protocol.Contract.encode_term_frame(:result, payload)
+    frame = Exdock.Protocol.Contract.encode!(:result, payload)
 
     assert {:client_message, %Exdock.Server.Connection.WireMessage{data: ^data, error: nil}} =
              Exdock.Server.Connection.Protocol.decode_message(frame, :authenticated)

@@ -84,9 +84,11 @@ defmodule Exdock.ClientLibTest do
 
       assert_receive {:"$gen_cast", {:client_message, {:result, result}}}, 1_000
       assert result["error"] == expected_error
-      frame = Exdock.Protocol.Contract.encode_term_frame(:result, result)
+      frame = Exdock.Protocol.Contract.encode!(:result, result)
 
-      assert {:client_message, %Exdock.Server.Connection.WireMessage{error: ^expected_error}} =
+      wire_error = Atom.to_string(expected_error)
+
+      assert {:client_message, %Exdock.Server.Connection.WireMessage{error: ^wire_error}} =
                Exdock.Server.Connection.Protocol.decode_message(frame, :authenticated)
 
       assert GenServer.whereis(CommandDispatcher) == dispatcher
@@ -111,9 +113,9 @@ defmodule Exdock.ClientLibTest do
     assert {:noreply, updated} = CommandDispatcher.handle_info({:DOWN, ref, :process, self(), :killed}, state)
     assert updated.command_tasks == %{}
     assert_receive {:"$gen_cast", {:client_message, {:result, result}}}
-    frame = Exdock.Protocol.Contract.encode_term_frame(:result, result)
+    frame = Exdock.Protocol.Contract.encode!(:result, result)
 
-    assert {:client_message, %Exdock.Server.Connection.WireMessage{error: {:command_worker_exit, ":killed"}}} =
+    assert {:client_message, %Exdock.Server.Connection.WireMessage{error: ["command_worker_exit", ":killed"]}} =
              Exdock.Server.Connection.Protocol.decode_message(frame, :authenticated)
   end
 

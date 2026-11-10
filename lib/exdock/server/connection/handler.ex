@@ -10,12 +10,14 @@ defmodule Exdock.Server.Connection.Handler do
 
   use GenServer
   require Logger
+  alias Exdock.Protocol.Channel
   alias Exdock.Protocol.Messages.JobResult
   alias Exdock.Protocol.Message
   alias Exdock.Server.Connection.Handler.FrameRouter
   alias Exdock.Server.Connection.Handler.Lifecycle
   alias Exdock.Server.Connection.Handler.SessionEffects
   alias Exdock.Server.Connection.Handler.State, as: HandlerState
+  alias Exdock.Server.Connection.Session
   alias Exdock.Server.Connection.Utils
   alias Exdock.Server.Jobs.Job
 
@@ -57,29 +59,39 @@ defmodule Exdock.Server.Connection.Handler do
   end
 
   @doc false
-  @spec activate_socket(pid()) :: :ok | {:error, term()}
-  def activate_socket(handler_pid) do
-    GenServer.call(handler_pid, :activate_socket)
+  @spec activate_socket(pid(), pos_integer()) :: :ok | {:error, term()}
+  def activate_socket(handler_pid, max_frame_size) do
+    GenServer.call(handler_pid, {:activate_socket, max_frame_size})
   end
 
   @impl true
-  def handle_call(:activate_socket, _from, state) do
-    case :ssl.setopts(state.socket, active: :once) do
-      :ok -> {:reply, :ok, state}
+  def handle_call({:activate_socket, max_frame_size}, _from, state) do
+    with {:ok, wire, []} <- Channel.start(:server, &:ssl.send(state.socket, &1), max_frame_size),
+         :ok <- :ssl.setopts(state.socket, active: :once) do
+      schedule_wire_tick()
+      {:reply, :ok, %{state | wire: wire}}
+    else
       {:error, reason} -> {:stop, {:socket_activation_failed, reason}, {:error, reason}, state}
     end
   end
 
   @impl true
   def handle_call({:send_command, %Job{} = job}, _from, state) do
-    command = Message.command(job.id, job.name, job.parameters)
+    if Session.ready?(state.session) do
+      command = Message.command(job.id, job.name, job.parameters)
 
-    case SessionEffects.send_message(state.socket, {:command, command}) do
-      :ok ->
-        {:reply, :ok, track_dispatched_job(state, job)}
+      case SessionEffects.send_message(state, {:command, command}) do
+        {:ok, state} ->
+          {:reply, :ok, track_dispatched_job(state, job)}
 
-      {:error, reason} = error ->
-        {:stop, {:socket_send_failed, reason}, error, state}
+        {:error, {:transport_error, reason}} = error ->
+          {:stop, {:socket_send_failed, reason}, error, %{state | wire: nil}}
+
+        {:error, _} = error ->
+          {:reply, error, state}
+      end
+    else
+      {:reply, {:error, :client_not_ready}, state}
     end
   end
 
@@ -90,11 +102,14 @@ defmodule Exdock.Server.Connection.Handler do
   end
 
   @impl true
-  def handle_info({:ssl, socket, data}, state) do
-    state
-    |> handle_client_message(socket, data)
-    |> activate_after_frame()
+  def handle_info({:ssl, socket, bytes}, %{socket: socket, wire: wire} = state) when not is_nil(wire) do
+    case Channel.feed(wire, bytes, &:ssl.send(socket, &1)) do
+      {:ok, wire, events} -> apply_events(events, %{state | wire: wire}) |> activate_after_frame()
+      {:error, reason} -> {:stop, reason, %{state | wire: nil}}
+    end
   end
+
+  def handle_info({:ssl, _socket, _bytes}, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:ssl_closed, _socket}, state) do
@@ -111,11 +126,15 @@ defmodule Exdock.Server.Connection.Handler do
   end
 
   @impl true
-  def handle_info({:heartbeat, :timeout}, state) do
-    Logger.warning("Client [#{state.session.client_name}] heartbeat timeout")
+  def handle_info(:wire_tick, state) do
+    case Channel.tick(state.wire, &:ssl.send(state.socket, &1)) do
+      {:ok, wire, []} ->
+        schedule_wire_tick()
+        {:noreply, %{state | wire: wire}}
 
-    Lifecycle.decide(:heartbeat_timeout, state.session)
-    |> interpret_lifecycle(state)
+      {:error, reason} ->
+        {:stop, reason, %{state | wire: nil}}
+    end
   end
 
   @impl true
@@ -135,14 +154,25 @@ defmodule Exdock.Server.Connection.Handler do
   end
 
   @impl true
-  def terminate(reason, %{socket: socket, session: session}) do
-    termination_message = termination_log_message(socket, session.client_name, reason)
+  def format_status(status) do
+    status
+    |> Map.update(:state, nil, &%{&1 | auth_key: :redacted, wire: :redacted})
+    |> Map.replace(:message, :redacted)
+    |> Map.replace(:log, [])
+  end
+
+  @impl true
+  def terminate(reason, %{socket: socket, session: session} = state) do
+    client_name = if Session.registered?(session), do: session.client_name
+    termination_message = termination_log_message(socket, client_name, reason)
 
     if normal_termination?(reason) do
       Logger.debug(termination_message)
     else
       Logger.warning(termination_message)
-      SessionEffects.send_message(socket, {:error, reason})
+
+      if state.wire && NodeWire.Session.status(state.wire) == :established,
+        do: SessionEffects.send_message(state, {:error, reason})
     end
 
     # :ssl.close/1 is idempotent, so termination can always close defensively.
@@ -159,14 +189,17 @@ defmodule Exdock.Server.Connection.Handler do
   defp interpret_lifecycle(:continue, state), do: {:noreply, state}
   defp interpret_lifecycle({:stop, reason}, state), do: {:stop, reason, state}
 
-  # Decode and route one frame from the client. Authentication is the boundary:
-  # only heartbeat/version errors and hello are accepted before auth succeeds.
-  @spec handle_client_message(t, :ssl.sslsocket(), binary()) :: {:noreply, t} | {:stop, any, t}
-  defp handle_client_message(state, socket, message) do
-    state.session
-    |> FrameRouter.route(message)
-    |> SessionEffects.interpret(state, socket, message)
+  defp apply_events([], state), do: {:noreply, state}
+  defp apply_events([:established | events], state), do: apply_events(events, state)
+
+  defp apply_events([event | events], state) do
+    case state.session |> FrameRouter.route(event) |> SessionEffects.interpret(state, state.socket, <<>>) do
+      {:noreply, state} -> apply_events(events, state)
+      {:stop, _, _} = stop -> stop
+    end
   end
+
+  defp schedule_wire_tick, do: Process.send_after(self(), :wire_tick, Channel.tick_interval())
 
   defp activate_after_frame({:noreply, state}), do: activate_next_frame(state)
   defp activate_after_frame(result), do: result

@@ -21,5 +21,5 @@ defmodule Exdock.Server.Connection.TCPServer.HandshakeWorker.Port do
               GenServer.server()
             ) :: {:ok, pid()} | {:error, term()}
   @callback stop_handler(context :: term(), pid(), reason :: term()) :: term()
-  @callback activate_handler(context :: term(), pid()) :: :ok | {:error, term()}
+  @callback activate_handler(context :: term(), pid(), pos_integer()) :: :ok | {:error, term()}
 end

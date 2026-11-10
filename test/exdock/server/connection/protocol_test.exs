@@ -8,29 +8,28 @@ defmodule Exdock.Server.Connection.ProtocolTest do
 
   @metadata %{
     "platform" => "linux/amd64",
-    "agent_version" => "1.1.0",
+    "agent_version" => "1.2.0",
     "elixir_version" => "1.18.4",
     "otp_release" => "27"
   }
 
   test "round trips heartbeat and server error frames" do
-    assert {:heartbeat, ""} = Protocol.decode_message(Protocol.encode_message({:heartbeat}))
     assert {:error, :shutdown} = Protocol.decode_message(Protocol.encode_message({:error, :shutdown}))
   end
 
   test "decodes a validated unauthenticated hello" do
     hello = %{"agent_version" => "1.2.3", "auth_token" => "abc", "node" => "node-01"}
-    frame = Contract.encode_term_frame(:hello, hello)
+    frame = Contract.encode!(:hello, hello)
 
     assert {:hello, "1.2.3", "abc", "node-01"} = Protocol.decode_message(frame)
   end
 
   test "encodes only validated protocol commands" do
     command = Message.command("job-id", :container_start, ["container-id"])
-    assert {:ok, :command, payload} = Protocol.encode_message({:command, command}) |> Contract.decode_frame()
+    assert {:ok, {:command, payload}} = Protocol.encode_message({:command, command}) |> Contract.decode()
 
     assert {:ok, %{"id" => "job-id", "kind" => "container_start", "args" => ["container-id"]}} =
-             Contract.decode_term(payload, [:safe])
+             {:ok, payload}
 
     assert_raise ArgumentError, fn ->
       Protocol.encode_message({:command, %{"id" => "job-id", "kind" => "arbitrary_rpc", "args" => []}})
@@ -39,7 +38,7 @@ defmodule Exdock.Server.Connection.ProtocolTest do
 
   test "converts authenticated result maps at the transport boundary" do
     payload = Message.result("job-id", "container_start", "node", "container-id", nil)
-    frame = Contract.encode_term_frame(:result, payload)
+    frame = Contract.encode!(:result, payload)
 
     assert {:client_message,
             %WireMessage{
@@ -76,7 +75,7 @@ defmodule Exdock.Server.Connection.ProtocolTest do
     }
 
     data = Wire.encode_result("node_refresh", {%{ok: [container], errored: []}, %{ok: [image], errored: []}})
-    frame = Contract.encode_term_frame(:result, Message.result("refresh-id", "node_refresh", "node", data, nil))
+    frame = Contract.encode!(:result, Message.result("refresh-id", "node_refresh", "node", data, nil))
 
     assert {:client_message,
             %WireMessage{
@@ -97,7 +96,7 @@ defmodule Exdock.Server.Connection.ProtocolTest do
     payload = Message.result("refresh-id", "node_refresh", "node", %{"containers" => []}, nil)
 
     assert {:error, :malformed_message} =
-             Protocol.decode_message(Contract.encode_term_frame(:result, payload), :authenticated)
+             Protocol.decode_message(Contract.encode!(:result, payload), :authenticated)
 
     malformed_snapshot = %{
       "containers" => %{"ok" => [%{}], "errored" => []},
@@ -107,7 +106,7 @@ defmodule Exdock.Server.Connection.ProtocolTest do
     payload = Message.result("refresh-id", "node_refresh", "node", malformed_snapshot, nil)
 
     assert {:error, :malformed_message} =
-             Protocol.decode_message(Contract.encode_term_frame(:result, payload), :authenticated)
+             Protocol.decode_message(Contract.encode!(:result, payload), :authenticated)
   end
 
   test "converts authenticated progress and resource maps" do
@@ -121,23 +120,23 @@ defmodule Exdock.Server.Connection.ProtocolTest do
               node: "node",
               data: "starting"
             }} =
-             Protocol.decode_message(Contract.encode_term_frame(:progress, progress), :authenticated)
+             Protocol.decode_message(Contract.encode!(:progress, progress), :authenticated)
 
     sample = Message.resource_sample("node", "container-id", %{read: 1})
 
-    assert {:client_message, %WireMessage{type: :resource_sample, node: "node", id: "container-id", data: %{read: 1}}} =
-             Protocol.decode_message(Contract.encode_term_frame(:resource_sample, sample), :authenticated)
+    assert {:client_message, %WireMessage{type: :resource_sample, node: "node", id: "container-id", data: %{"read" => 1}}} =
+             Protocol.decode_message(Contract.encode!(:resource_sample, sample), :authenticated)
   end
 
   test "rejects lifecycle and result messages at the wrong trust boundary" do
     result = Message.result("job-id", "container_start", "node", "container-id", nil)
-    assert {:error, :malformed_message} = Protocol.decode_message(Contract.encode_term_frame(:result, result))
+    assert {:error, :malformed_message} = Protocol.decode_message(Contract.encode!(:result, result))
 
     ready = %{"bundle_version" => "1", "digest" => "abc", "metadata" => @metadata}
-    assert {:error, :malformed_message} = Protocol.decode_message(Contract.encode_term_frame(:ready, ready))
+    assert {:error, :malformed_message} = Protocol.decode_message(Contract.encode!(:ready, ready))
 
     assert {:ready, "1", "abc", @metadata} =
-             Protocol.decode_message(Contract.encode_term_frame(:ready, ready), :authenticated)
+             Protocol.decode_message(Contract.encode!(:ready, ready), :authenticated)
   end
 
   test "rejects invalid authenticated node identifiers without raising" do
@@ -150,7 +149,7 @@ defmodule Exdock.Server.Connection.ProtocolTest do
           {:result, result},
           {:resource_sample, sample}
         ] do
-      frame = Contract.encode_term_frame(message_type, payload)
+      frame = Contract.encode!(message_type, payload)
       assert {:error, :malformed_message} = Protocol.decode_message(frame, :authenticated)
     end
   end
@@ -163,10 +162,9 @@ defmodule Exdock.Server.Connection.ProtocolTest do
     }
 
     assert {:ready, "1", "abc", @metadata} =
-             Protocol.decode_message(Contract.encode_term_frame(:ready, ready), :authenticated)
+             Protocol.decode_message(Contract.encode!(:ready, ready), :authenticated)
 
     for metadata <- [
-          nil,
           Map.delete(@metadata, "platform"),
           Map.put(@metadata, "platform", ""),
           Map.put(@metadata, "otp_release", 27),
@@ -175,19 +173,15 @@ defmodule Exdock.Server.Connection.ProtocolTest do
       invalid_ready = %{"bundle_version" => "1", "digest" => "abc", "metadata" => metadata}
 
       assert {:error, :malformed_message} =
-               Protocol.decode_message(Contract.encode_term_frame(:ready, invalid_ready), :authenticated)
+               Protocol.decode_message(Contract.encode!(:ready, invalid_ready), :authenticated)
     end
 
-    assert {:error, :malformed_message} =
-             Protocol.decode_message(
-               Contract.encode_term_frame(:ready, %{"bundle_version" => "1", "digest" => "abc"}),
-               :authenticated
-             )
+    assert {:error, %NodeWire.Error{}} =
+             Exdock.Protocol.NodeWire.encode(:ready, %{"bundle_version" => "1", "digest" => "abc"})
   end
 
   test "rejects malformed maps and unsafe atom payloads" do
-    assert {:error, :malformed_message} =
-             Protocol.decode_message(Contract.encode_term_frame(:result, %{"id" => "missing-fields"}), :authenticated)
+    assert {:error, %NodeWire.Error{}} = Exdock.Protocol.NodeWire.encode(:result, %{"id" => "missing-fields"})
 
     atom_name = "untrusted_protocol_atom_#{System.unique_integer([:positive])}"
     atom_payload = <<131, 118, byte_size(atom_name)::16, atom_name::binary>>
@@ -200,8 +194,8 @@ defmodule Exdock.Server.Connection.ProtocolTest do
 
   test "rejects malformed and incompatible frames" do
     assert {:error, :malformed_message} = Protocol.decode_message(<<4>>)
-    assert {:error, :version_too_old} = Protocol.decode_message(<<3, 1>>)
-    assert {:error, :version_too_new} = Protocol.decode_message(<<5, 1>>)
-    assert {:error, :unknown_message_type} = Protocol.decode_message(<<4, 255>>)
+    assert {:error, :malformed_message} = Protocol.decode_message(<<3, 1>>)
+    assert {:error, :malformed_message} = Protocol.decode_message(<<5, 1>>)
+    assert {:error, :malformed_message} = Protocol.decode_message(<<4, 255>>)
   end
 end

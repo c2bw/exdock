@@ -13,8 +13,8 @@ wire, and agent-compatibility versions are separate contracts:
 | --- | --- | --- |
 | Server and standalone agent packages | `0.1.1` | `build/project_config.exs`, control-plane track |
 | Shared runtime and protocol packages | `0.1.0` | `build/project_config.exs`, runtime/protocol track |
-| Wire protocol | `4` | `Exdock.Protocol.Compatibility` |
-| Agent compatibility version / server range | `1.1.0` / `~> 1.1.0` | `Exdock.Protocol.Compatibility` |
+| Wire protocol | `5` | `Exdock.Protocol.Compatibility` |
+| Agent compatibility version / server range | `1.2.0` / `~> 1.2.0` | `Exdock.Protocol.Compatibility` |
 | Runtime-bundle format | `1` | `Exdock.Protocol.Compatibility` |
 
 `scripts/release_metadata.exs` derives the machine-readable manifest from these

@@ -48,7 +48,7 @@ defmodule Exdock.Server.Connection.TCPServer.HandshakeWorker.Context do
          auth_key: auth_key,
          port: port,
          port_context: Keyword.get(opts, :port_context),
-         max_frame_size: max_frame_size,
+         max_frame_size: max(1024, min(max_frame_size, 8_388_626)),
          task_supervisor: Keyword.get(opts, :task_supervisor, TCPServer.TaskSupervisor),
          handshake_timeout: handshake_timeout,
          socket_handoff_timeout: socket_handoff_timeout

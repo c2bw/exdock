@@ -10,12 +10,11 @@ defmodule Exdock.Client.Connection.Handshake do
 
   alias Exdock.Client.Connection.EffectRunner
   alias Exdock.Client.Connection.Metadata
-  alias Exdock.Client.Connection.Protocol
+  alias Exdock.Protocol.Channel
   alias Exdock.Client.Connection.RuntimeInstaller
   alias Exdock.Client.Connection.Session
   alias Exdock.Client.Connection.State
 
-  @heartbeat_interval 10_000
   @send_timeout 3_000
 
   @spec connect(State.t()) :: {:ok, State.t()} | {:error, State.t()}
@@ -29,28 +28,25 @@ defmodule Exdock.Client.Connection.Handshake do
       # this client, not the server. See docs/UNVERIFIED_TLS_ACCEPTED_RISK_SPEC.md.
       verify: :verify_none,
       mode: :binary,
-      packet: 4
+      packet: :raw,
+      active: false,
+      send_timeout: @send_timeout,
+      send_timeout_close: true
     ]
 
     case state.transport.connect(state.host, state.port, ssl_opts, @send_timeout) do
       {:ok, socket} ->
         Logger.info("Established SSL connection with #{state.host}:#{state.port}")
 
-        state =
-          state
-          |> EffectRunner.cancel_reconnect()
-          |> then(
-            &%{
-              &1
-              | socket: socket,
-                reconnect_timer: nil,
-                heartbeat_timer: schedule_heartbeat(state)
-            }
-          )
-          |> transition_session!(:socket_connected)
+        state = state |> EffectRunner.cancel_reconnect() |> Map.put(:socket, socket)
 
-        send(self(), :authenticate_client)
-        {:ok, state}
+        with {:ok, wire, []} <- Channel.start(:client, &state.transport.send(socket, &1)),
+             :ok <- state.transport.activate(socket) do
+          state = %{state | wire: wire, heartbeat_timer: schedule_heartbeat(state)}
+          {:ok, transition_session!(state, :socket_connected)}
+        else
+          {:error, reason} -> {:error, EffectRunner.disconnect(state, "NodeWire setup: #{inspect(reason)}")}
+        end
 
       {:error, reason} ->
         Logger.error("Failed to establish SSL connection with [#{state.host}:#{state.port}] [#{inspect(reason)}]")
@@ -76,14 +72,13 @@ defmodule Exdock.Client.Connection.Handshake do
     }
 
     case send_message(state, {:hello, hello}) do
-      :noop -> state
-      :ok -> state
-      {:error, reason} -> EffectRunner.disconnect(state, "authenticate_client: TCP error: #{reason}")
+      {:ok, state} -> state
+      {:error, reason} -> EffectRunner.disconnect(state, "authenticate_client: NodeWire error: #{inspect(reason)}")
     end
   end
 
-  @spec initialize_runtime(map(), term(), State.t(), String.t(), module()) :: State.t()
-  def initialize_runtime(bundle, socket, %State{} = state, client_version, runtime_module)
+  @spec initialize_runtime(map(), State.t(), String.t(), module()) :: State.t()
+  def initialize_runtime(bundle, %State{} = state, client_version, runtime_module)
       when is_map(bundle) and is_binary(client_version) and is_atom(runtime_module) do
     Logger.info("Initializing client..")
     Logger.debug("Loading runtime bundle #{bundle["version"]}")
@@ -100,10 +95,9 @@ defmodule Exdock.Client.Connection.Handshake do
           "metadata" => Metadata.collect(client_version)
         }
 
-        case send_message(state, socket, {:ready, ready}) do
-          :noop -> state
-          :ok -> transition_session!(state, :ready)
-          {:error, reason} -> EffectRunner.disconnect(state, "client_ready: TCP error: #{reason}")
+        case send_message(state, {:ready, ready}) do
+          {:ok, state} -> transition_session!(state, :ready)
+          {:error, reason} -> EffectRunner.disconnect(state, "client_ready: NodeWire error: #{inspect(reason)}")
         end
 
       {:error, reason} ->
@@ -113,27 +107,49 @@ defmodule Exdock.Client.Connection.Handshake do
 
   @spec heartbeat(State.t()) :: State.t()
   def heartbeat(%State{} = state) do
-    case send_message(state, {:heartbeat}) do
-      :noop -> state
-      :ok -> %{state | heartbeat_timer: schedule_heartbeat(state)}
-      {:error, reason} -> EffectRunner.disconnect(state, "heartbeat: TCP error: #{reason}")
+    case Channel.tick(state.wire, &state.transport.send(state.socket, &1)) do
+      {:ok, wire, []} -> %{state | wire: wire, heartbeat_timer: schedule_heartbeat(state)}
+      {:error, reason} -> EffectRunner.disconnect(state, "NodeWire tick: #{inspect(reason)}")
     end
   end
 
   @spec send_client_message(State.t(), term()) :: State.t()
   def send_client_message(%State{} = state, message) do
-    # Results from work started on a previous connection must not be sent into
-    # the new connection's authentication or bundle exchange.
-    result = if Session.in_phase?(state.session, :ready), do: send_message(state, state.socket, message), else: :noop
+    if Session.in_phase?(state.session, :ready) do
+      case send_message(state, message) do
+        {:ok, state} ->
+          state
 
-    case result do
-      :noop -> state
-      :ok -> state
-      {:error, reason} -> EffectRunner.disconnect(state, "client_message: TCP error: #{reason}")
+        {:error, %NodeWire.Session.Error{code: code}}
+        when code in [:frame_too_large, :invalid_payload] ->
+          send_size_failure(state, message)
+
+        {:error, reason} ->
+          EffectRunner.disconnect(state, "NodeWire send: #{inspect(reason)}")
+      end
+    else
+      state
     end
   end
 
-  defp schedule_heartbeat(state), do: state.timer.heartbeat(@heartbeat_interval)
+  defp send_size_failure(state, {:result, %{"kind" => kind} = result}) do
+    data =
+      if kind == "node_refresh" do
+        empty = %{"ok" => [], "errored" => []}
+        %{"containers" => empty, "images" => empty}
+      end
+
+    failure = %{result | "data" => data, "error" => "Result could not be encoded within the agent wire limits"}
+
+    case send_message(state, {:result, failure}) do
+      {:ok, state} -> state
+      {:error, reason} -> EffectRunner.disconnect(state, "NodeWire send: #{inspect(reason)}")
+    end
+  end
+
+  defp send_size_failure(state, _message), do: state
+
+  defp schedule_heartbeat(state), do: state.timer.heartbeat(Channel.tick_interval())
 
   defp transition_session!(%State{} = state, event) do
     case Session.transition(state.session, event) do
@@ -142,14 +158,9 @@ defmodule Exdock.Client.Connection.Handshake do
     end
   end
 
-  defp send_message(state, message), do: send_message(state, state.socket, message)
-
-  defp send_message(state, socket, message) do
-    encoded = Protocol.encode_message(message)
-
-    case socket do
-      nil -> :noop
-      socket -> state.transport.send(socket, encoded)
+  defp send_message(state, message) do
+    with {:ok, wire, []} <- Channel.send_event(state.wire, message, &state.transport.send(state.socket, &1)) do
+      {:ok, %{state | wire: wire}}
     end
   end
 end

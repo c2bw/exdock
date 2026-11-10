@@ -31,10 +31,10 @@ defmodule Exdock.Server.Connection.HandlerTest do
   end
 
   test "handshake validates release, credentials, and bundle acknowledgement" do
-    assert :ok = Handshake.validate_client("1.1.0", "same-token", "same-token")
-    assert {:error, :invalid_auth} = Handshake.validate_client("1.1.0", "same-token", "wrong-token")
+    assert :ok = Handshake.validate_client("1.2.0", "same-token", "same-token")
+    assert {:error, :invalid_auth} = Handshake.validate_client("1.2.0", "same-token", "wrong-token")
 
-    assert {:error, {:version_requirement, "~> 1.1.0"}} =
+    assert {:error, {:version_requirement, "~> 1.2.0"}} =
              Handshake.validate_client("2.0.0", "same-token", "same-token")
 
     assert Handshake.ready?("1", "digest", "1", "digest")
@@ -90,11 +90,11 @@ defmodule Exdock.Server.Connection.HandlerTest do
     assert expired_state.remote_jobs.entries == %{}
   end
 
-  test "rejects a command immediately when the socket write fails" do
+  test "rejects a command before the agent is ready" do
     state = %{handler_state("node-a") | socket: nil}
     job = %Job{id: "job-id", name: :container_start, parameters: ["container-id"]}
 
-    assert {:stop, {:socket_send_failed, {:exception, message}}, {:error, {:exception, message}}, ^state} =
+    assert {:reply, {:error, :client_not_ready}, ^state} =
              Handler.handle_call({:send_command, job}, self(), state)
 
     assert state.remote_jobs.entries == %{}

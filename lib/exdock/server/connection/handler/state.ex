@@ -15,7 +15,7 @@ defmodule Exdock.Server.Connection.Handler.State do
   defstruct parent_pid: nil,
             auth_key: nil,
             socket: nil,
-            heartbeat_timer: nil,
+            wire: nil,
             connected_at: nil,
             session: nil,
             remote_jobs: nil
@@ -24,7 +24,7 @@ defmodule Exdock.Server.Connection.Handler.State do
           parent_pid: pid(),
           auth_key: String.t(),
           socket: :ssl.sslsocket(),
-          heartbeat_timer: reference() | nil,
+          wire: NodeWire.Session.t() | nil,
           connected_at: DateTime.t(),
           session: Session.t(),
           remote_jobs: RemoteJobs.t()

@@ -155,28 +155,16 @@ stops downstream work.
 completion. Notification delivery is a consumer of lifecycle events rather than
 a state owner.
 
-## Protocol v4
+## NodeWire agent protocol
 
-The standalone client and server share
-`lib/exdock_client/exdock_protocol`. TLS transport uses OTP `packet: 4`; the
-inner frame is:
+The server and standalone agent share a NodeWire application contract through
+`lib/exdock_client/exdock_protocol`. TLS carries raw binary chunks. NodeWire
+negotiates the exact contract fingerprint and owns framing, schema validation,
+and heartbeats.
 
-```text
-<<4::8, message_type::8, payload::binary>>
-```
-
-Terms are decoded with Erlang safe decoding and then validated by the receiving
-endpoint. Wire messages are explicit maps for:
-
-- `hello`
-- `runtime_bundle`
-- `ready`
-- `command`
-- `progress`
-- `result`
-- `resource_sample`
-- `heartbeat`
-- `error`
+The application events are `hello`, `runtime_bundle`, `ready`, `command`,
+`progress`, `result`, `resource_sample`, and `error`. The job ID remains
+Exdock's correlation key. NodeWire sends these events without automatic retries.
 
 The command allowlist is node refresh, container recreate/start/stop/restart/
 logs/resource sampling, and image pull/delete. A message cannot choose an
@@ -191,8 +179,8 @@ the connection initialized. It also reports bounded, validated metadata for the
 agent platform, agent version, Elixir version, and OTP release. This metadata is
 kept only for the lifetime of the connected node and is not persisted.
 
-Protocol v3 is rejected. Version mismatches stop reconnect loops because v4 is
-a coordinated server/client cutover, not a rolling-compatible deployment.
+Wire version 5 requires a coordinated server and agent rollout. Both peers
+must use the NodeWire application contract.
 
 The runtime bundle contains exactly `Exdock.AgentRuntime`,
 `Exdock.AgentRuntime.Executor`, `Exdock.AgentRuntime.Size`, and

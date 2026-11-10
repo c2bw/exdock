@@ -5,42 +5,17 @@ defmodule Exdock.Protocol.ContractTest do
   alias Exdock.Protocol.RuntimeBundle
   alias Exdock.Protocol.Snapshot
 
-  test "keeps protocol-v4 message identifiers stable" do
-    assert Contract.current_version() == 4
-
-    assert Contract.message_types() == %{
-             heartbeat: 1,
-             error: 9,
-             hello: 10,
-             runtime_bundle: 11,
-             ready: 12,
-             command: 13,
-             progress: 14,
-             result: 15,
-             resource_sample: 16
-           }
-  end
-
   test "keeps coordinated compatibility values in one contract" do
     assert Compatibility.wire_version() == Contract.current_version()
-    assert Compatibility.agent_version() == "1.1.0"
-    assert Compatibility.agent_requirement() == "~> 1.1.0"
+    assert Compatibility.agent_version() == "1.2.0"
+    assert Compatibility.agent_requirement() == "~> 1.2.0"
     assert Compatibility.runtime_bundle_version() == "1"
   end
 
-  test "encodes and safely decodes map payloads" do
-    hello = %{"agent_version" => "1.1.0", "auth_token" => "token", "node" => "node-a"}
-    frame = Contract.encode_term_frame(:hello, hello)
-
-    assert {:ok, :hello, payload} = Contract.decode_frame(frame)
-    assert {:ok, ^hello} = Contract.decode_term(payload, [:safe])
-  end
-
-  test "rejects malformed, old, future, and unknown frames" do
-    assert {:error, :malformed_message} = Contract.decode_frame(<<4>>)
-    assert {:error, :version_too_old} = Contract.decode_frame(<<3, 1>>)
-    assert {:error, :version_too_new} = Contract.decode_frame(<<5, 1>>)
-    assert {:error, :unknown_message_type} = Contract.decode_frame(<<4, 255>>)
+  test "uses the NodeWire application contract" do
+    hello = %{"agent_version" => "1.2.0", "auth_token" => "token", "node" => "node-a"}
+    assert {:ok, {:hello, ^hello}} = hello |> then(&Contract.encode!(:hello, &1)) |> Contract.decode()
+    assert {:error, %NodeWire.Error{}} = Contract.decode(<<4, 10, 131>>)
   end
 
   test "runtime bundles detect tampering and enforce module policy" do

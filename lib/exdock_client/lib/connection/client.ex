@@ -13,11 +13,10 @@ defmodule Exdock.Client.Connection.TCPClient do
   alias Exdock.Client.Connection.EffectRunner
   alias Exdock.Client.Connection.Handshake
   alias Exdock.Client.Connection.Lifecycle
-  alias Exdock.Client.Connection.RuntimeInstaller
   alias Exdock.Client.Connection.ServerMessage
   alias Exdock.Client.Connection.Session
   alias Exdock.Client.Connection.State
-  alias Exdock.Protocol.Compatibility
+  alias Exdock.Protocol.{Channel, Compatibility}
 
   @client_version Compatibility.agent_version()
   @runtime_module Exdock.AgentRuntime
@@ -30,10 +29,6 @@ defmodule Exdock.Client.Connection.TCPClient do
 
   @impl true
   def init({client_name, host, port, auth_key}) do
-    # Safe decoding cannot create the module atoms carried by the authenticated
-    # runtime bundle, so register the fixed allowlist before opening the socket.
-    :ok = RuntimeInstaller.prepare()
-
     # Match the server-side token representation so the raw configured secret is
     # not retained after startup.
     auth_key = :crypto.hash(:sha256, auth_key) |> Base.encode16()
@@ -87,60 +82,29 @@ defmodule Exdock.Client.Connection.TCPClient do
   end
 
   @impl true
-  def handle_info(:heartbeat, state) do
-    state =
-      case Lifecycle.decide(:heartbeat, state.session, @client_version) do
-        :send_heartbeat -> Handshake.heartbeat(state)
-        :ignore -> state
-      end
-
-    {:noreply, state}
+  def handle_info({:timeout, timer, :wire_tick}, %{heartbeat_timer: timer} = state) do
+    {:noreply, Handshake.heartbeat(state)}
   end
 
-  @impl true
-  def handle_info({:server_error, error}, state) do
-    error
-    |> then(&Lifecycle.decide({:server_error, &1}, state.session, @client_version))
-    |> interpret_lifecycle(state)
-  end
+  def handle_info({:timeout, _timer, :wire_tick}, state), do: {:noreply, state}
 
   @impl true
-  def handle_info(:authenticate_client, state) do
-    case Lifecycle.decide(:authenticate, state.session, @client_version) do
-      :authenticate -> {:noreply, Handshake.authenticate(state, @client_version)}
-      :ignore -> {:noreply, state}
+  def handle_info({:ssl, socket, bytes}, %{socket: socket, wire: wire} = state) when not is_nil(wire) do
+    case Channel.feed(wire, bytes, &state.transport.send(socket, &1)) do
+      {:ok, wire, events} ->
+        state = apply_events(events, %{state | wire: wire})
+
+        case state.socket && state.transport.activate(socket) do
+          {:error, reason} -> {:noreply, EffectRunner.disconnect(state, "SSL activation: #{inspect(reason)}")}
+          _ -> {:noreply, state}
+        end
+
+      {:error, reason} ->
+        {:noreply, EffectRunner.disconnect(state, "NodeWire receive: #{inspect(reason)}")}
     end
   end
 
-  @impl true
-  def handle_info({:runtime_bundle, bundle, socket}, state) do
-    case Lifecycle.decide({:runtime_bundle, socket == state.socket}, state.session, @client_version) do
-      :initialize_runtime ->
-        {:noreply,
-         Handshake.initialize_runtime(
-           bundle,
-           socket,
-           state,
-           @client_version,
-           @runtime_module
-         )}
-
-      :ignore ->
-        {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_info({:ssl, socket, data}, state) do
-    case Lifecycle.decide({:socket_frame, socket == state.socket}, state.session, @client_version) do
-      :handle_frame ->
-        handle_server_message(socket, data, state)
-        {:noreply, state}
-
-      :ignore ->
-        {:noreply, state}
-    end
-  end
+  def handle_info({:ssl, _socket, _bytes}, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:ssl_closed, socket}, state) do
@@ -164,13 +128,46 @@ defmodule Exdock.Client.Connection.TCPClient do
   defp handle_disconnection(state, reason, reconnect?),
     do: EffectRunner.disconnect(state, reason, reconnect?)
 
-  defp handle_server_message(socket, message, state) do
-    case ServerMessage.route(message) do
-      {:server_error, reason} -> send(self(), {:server_error, reason})
-      {:runtime_bundle, bundle} -> send(self(), {:runtime_bundle, bundle, socket})
-      {:execute, command} -> EffectRunner.execute_runtime(state, command)
-      {:unknown, decoded} -> Logger.error("Unknown TCP message from server: #{inspect(decoded)}")
-    end
+  defp apply_events([], state), do: state
+  defp apply_events(_events, %{socket: nil} = state), do: state
+
+  defp apply_events([:established | events], state) do
+    apply_events(events, Handshake.authenticate(state, @client_version))
+  end
+
+  defp apply_events([event | events], state) do
+    state =
+      case ServerMessage.route(event) do
+        {:server_error, reason} ->
+          {:noreply, state} =
+            Lifecycle.decide({:server_error, reason}, state.session, @client_version)
+            |> interpret_lifecycle(state)
+
+          state
+
+        {:runtime_bundle, bundle} ->
+          if Session.in_phase?(state.session, :authenticating),
+            do: Handshake.initialize_runtime(bundle, state, @client_version, @runtime_module),
+            else: EffectRunner.disconnect(state, "Unexpected runtime bundle")
+
+        {:execute, command} ->
+          if Session.in_phase?(state.session, :ready) do
+            EffectRunner.execute_runtime(state, command)
+            state
+          else
+            EffectRunner.disconnect(state, "Command received before runtime readiness")
+          end
+      end
+
+    apply_events(events, state)
+  end
+
+  @impl true
+  def format_status(status) do
+    status
+    |> Map.update(:state, nil, &%{&1 | auth_key: :redacted, wire: :redacted})
+    |> Map.replace(:message, :redacted)
+    |> Map.replace(:log, [])
   end
 
   @impl true

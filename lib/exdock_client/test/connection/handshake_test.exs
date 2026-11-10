@@ -6,7 +6,7 @@ defmodule Exdock.Client.Connection.HandshakeTest do
   alias Exdock.Client.Connection.Session
   alias Exdock.Client.Connection.State
 
-  test "connect opens the socket, advances the session, and schedules authentication" do
+  test "connect opens the socket, starts NodeWire negotiation and schedules its timer" do
     Process.put(:connect_result, {:ok, :socket})
 
     assert {:ok, connected} = Handshake.connect(state())
@@ -16,8 +16,8 @@ defmodule Exdock.Client.Connection.HandshakeTest do
 
     assert_receive {:connect, ~c"localhost", 5000, options, 3_000}
     assert options[:verify] == :verify_none
-    assert_receive {:heartbeat_scheduled, 10_000}
-    assert_receive :authenticate_client
+    assert_receive {:heartbeat_scheduled, 500}
+    assert_receive {:sent, :socket, <<"NW", _::binary>>}
   end
 
   test "failed connections return to disconnected state with one reconnect timer" do
@@ -30,56 +30,27 @@ defmodule Exdock.Client.Connection.HandshakeTest do
     assert_receive {:reconnect_scheduled, 20_000}
   end
 
-  test "authentication sends the canonical hello frame" do
-    state = %{state() | socket: :socket, session: %Session{phase: :authenticating, reconnect_enabled: true}}
-
-    assert Handshake.authenticate(state, "1.2.3") == state
-    assert_receive {:sent, :socket, frame}
-    assert is_binary(frame)
-  end
-
-  test "authentication disconnects after a transport failure" do
+  test "a failed NodeWire negotiation write closes the socket and schedules reconnect" do
+    Process.put(:connect_result, {:ok, :socket})
     Process.put(:send_result, {:error, :closed})
-    state = %{state() | socket: :socket, session: %Session{phase: :authenticating, reconnect_enabled: true}}
 
-    disconnected = Handshake.authenticate(state, "1.2.3")
-
+    assert {:error, disconnected} = Handshake.connect(state())
     assert disconnected.session.phase == :disconnected
     assert disconnected.socket == nil
-    assert is_reference(disconnected.reconnect_timer)
+    assert disconnected.wire == nil
     assert_receive {:closed, :socket}
     assert_receive {:reconnect_scheduled, 20_000}
   end
 
-  test "heartbeat and client messages are no-ops without a socket" do
-    state = state()
-
-    assert Handshake.heartbeat(state) == state
-    assert Handshake.send_client_message(state, {:heartbeat}) == state
-    refute_receive {:sent, _, _}
-  end
-
-  test "successful heartbeat schedules the next tick" do
-    state = %{state() | socket: :socket}
-
-    updated = Handshake.heartbeat(state)
-
-    assert is_reference(updated.heartbeat_timer)
-    assert_receive {:sent, :socket, _frame}
-    assert_receive {:heartbeat_scheduled, 10_000}
-  end
-
-  test "old runtime messages are suppressed until the new connection is ready" do
+  test "runtime messages are suppressed until the new connection is ready" do
     for phase <- [:disconnected, :authenticating, :initializing] do
       state = %{state() | socket: :socket, session: %Session{phase: phase, reconnect_enabled: true}}
-      assert Handshake.send_client_message(state, {:heartbeat}) == state
+      assert Handshake.send_client_message(state, {:result, %{}}) == state
       refute_receive {:sent, _, _}, 0
     end
-
-    state = %{state() | socket: :socket, session: %Session{phase: :ready, reconnect_enabled: true}}
-    assert Handshake.send_client_message(state, {:heartbeat}) == state
-    assert_receive {:sent, :socket, _}
   end
+
+  def activate(_socket), do: :ok
 
   def connect(host, port, options, timeout) do
     Kernel.send(self(), {:connect, host, port, options, timeout})

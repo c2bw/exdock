@@ -14,32 +14,25 @@ defmodule Exdock.Server.Connection.Handler.SessionEffects do
   alias Exdock.Server.Connection.ClientMessageAdapter
   alias Exdock.Server.Connection.Handler.Bootstrap
   alias Exdock.Server.Connection.Handler.State
-  alias Exdock.Server.Connection.Protocol
+  alias Exdock.Protocol.Channel
   alias Exdock.Server.Connection.WireMessage
   alias Exdock.Server.Connection.Utils
-
-  @heartbeat_timeout 30_000
 
   @type result :: {:noreply, State.t()} | {:stop, term(), State.t()}
 
   @spec interpret(term(), State.t(), :ssl.sslsocket(), binary()) :: result()
-  def interpret(:heartbeat, state, _socket, _frame) do
-    if state.heartbeat_timer, do: Process.cancel_timer(state.heartbeat_timer)
-    {:noreply, %{state | heartbeat_timer: heartbeat_timer()}}
-  end
-
   def interpret({:stop, reason}, state, _socket, _frame)
       when reason in [:version_too_old, :version_too_new, :unauthorized, :unexpected_message] do
     {:stop, reason, state}
   end
 
-  def interpret({:stop, :unknown_message_type}, state, socket, frame) do
-    Logger.warning("Unknown TCP message from [#{Utils.socket_address(socket)}]: #{inspect(frame)}")
+  def interpret({:stop, :unknown_message_type}, state, socket, _frame) do
+    Logger.warning("Unknown TCP message from [#{Utils.socket_address(socket)}]")
     {:stop, :unknown_message_type, state}
   end
 
-  def interpret({:stop, :malformed_message}, state, socket, frame) do
-    Logger.warning("Malformed TCP message from [#{Utils.socket_address(socket)}]: #{inspect(frame)}")
+  def interpret({:stop, :malformed_message}, state, socket, _frame) do
+    Logger.warning("Malformed TCP message from [#{Utils.socket_address(socket)}]")
     {:stop, :malformed_message, state}
   end
 
@@ -106,22 +99,23 @@ defmodule Exdock.Server.Connection.Handler.SessionEffects do
     {:noreply, state}
   end
 
-  @spec send_message(:ssl.sslsocket(), term()) :: :ok | {:error, term()}
-  def send_message(socket, message) do
-    message = Protocol.encode_message(message)
-    :ssl.send(socket, message)
-  rescue
-    exception -> {:error, {:exception, Exception.message(exception)}}
-  catch
-    kind, reason -> {:error, {kind, reason}}
+  @spec send_message(State.t(), term()) :: {:ok, State.t()} | {:error, term()}
+  def send_message(state, message) do
+    with {:ok, wire, []} <- Channel.send_event(state.wire, message, &:ssl.send(state.socket, &1)) do
+      {:ok, %{state | wire: wire}}
+    end
   end
 
   defp authenticate(state, socket, version, auth_key, client_name) do
     case Bootstrap.authenticate(state, version, auth_key, client_name) do
       {:ok, state, bundle} ->
         announce_client(socket)
-        send_message(socket, {:runtime_bundle, bundle})
-        {:noreply, state}
+
+        case send_message(state, {:runtime_bundle, bundle}) do
+          {:ok, state} -> {:noreply, state}
+          {:error, {:transport_error, reason}} -> {:stop, {:bundle_send_failed, reason}, %{state | wire: nil}}
+          {:error, reason} -> {:stop, {:bundle_send_failed, reason}, state}
+        end
 
       {:error, reason, state} ->
         authentication_error(reason, state, version, client_name)
@@ -131,10 +125,10 @@ defmodule Exdock.Server.Connection.Handler.SessionEffects do
   defp authentication_error(
          {:version_requirement, requirement} = reason,
          state,
-         version,
+         _version,
          _client_name
        ) do
-    Logger.warning("Disconnecting client due to version requirement: #{inspect(version)}, expected: #{requirement}")
+    Logger.warning("Disconnecting client due to version requirement #{requirement}")
 
     {:stop, reason, state}
   end
@@ -147,8 +141,8 @@ defmodule Exdock.Server.Connection.Handler.SessionEffects do
     {:stop, :duplicate_name, state}
   end
 
-  defp authentication_error(:invalid_name, state, _version, client_name) do
-    Logger.warning("Disconnecting client due to invalid name: #{client_name}")
+  defp authentication_error(:invalid_name, state, _version, _client_name) do
+    Logger.warning("Disconnecting client due to invalid name")
     {:stop, :invalid_name, state}
   end
 
@@ -164,7 +158,7 @@ defmodule Exdock.Server.Connection.Handler.SessionEffects do
         Logger.info("Client [#{state.session.client_name}] initialization completed in #{initialization_time}ms")
 
         send(state.parent_pid, {:client_ready, self(), state.session.client_name, metadata})
-        {:noreply, %{state | heartbeat_timer: heartbeat_timer()}}
+        {:noreply, state}
 
       {:error, :runtime_bundle_mismatch, state} ->
         {:stop, :runtime_bundle_mismatch, state}
@@ -179,9 +173,5 @@ defmodule Exdock.Server.Connection.Handler.SessionEffects do
       client_info ->
         Logger.info("New client connected: port=#{inspect(client_info.port)} address=#{inspect(client_info.address)}")
     end
-  end
-
-  defp heartbeat_timer do
-    Process.send_after(self(), {:heartbeat, :timeout}, @heartbeat_timeout)
   end
 end

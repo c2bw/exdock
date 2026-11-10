@@ -27,22 +27,12 @@ Client                                      Server
 
 ## Transport and framing
 
-The client opens an SSL socket to the configured server host and port. Both
-sides use binary mode and `packet: 4`, so Erlang/OTP adds and removes an outer
-four-byte packet-length prefix.
-
-The inner protocol frame is:
-
-```text
-<<protocol_version::8, message_type::8, payload::binary>>
-```
-
-The current protocol version is `4`. Most payloads are Erlang external-term
-binaries. Incoming terms are decoded with `binary_to_term(..., [:safe])`.
-
-The server limits frames to 16 MiB, permits up to 128 concurrent TLS handshake
-workers, and gives a TLS handshake five seconds to complete. A dedicated
-handler owns each accepted socket and reads one frame at a time.
+The agent opens a raw binary TLS socket. Each peer owns a NodeWire session
+that negotiates Exdock application protocol version 5 by exact manifest
+fingerprint. The session accepts fragmented and coalesced TLS chunks and
+validates each application payload against the shared JSON schema. The maximum
+application payload is 8 MiB. The server allows up to 128 concurrent TLS
+handshakes and gives each five seconds to complete.
 
 TLS uses a server-generated self-signed certificate and neither side verifies a
 CA or hostname. The connection is encrypted, but the client does not
@@ -53,7 +43,6 @@ authenticates the client to the server.
 
 | ID | Message |
 |---:|---|
-| 1 | `heartbeat` |
 | 9 | `error` |
 | 10 | `hello` |
 | 11 | `runtime_bundle` |
@@ -76,24 +65,21 @@ key from configuration. It retains the authentication key as:
 
 ### 2. `hello`
 
-After TLS succeeds, the client sends:
+After TLS and NodeWire negotiation succeed, the client sends:
 
 ```elixir
 %{
-  "agent_version" => "1.1.0",
+  "agent_version" => "1.2.0",
   "auth_token" => "<uppercase SHA-256 Base16 token>",
   "node" => "<configured node name>"
 }
 ```
 
-Before authentication, the server accepts only `hello`, `heartbeat`, and
-protocol error messages. It then validates, in order:
+The server accepts `hello` to begin authentication and checks:
 
-1. The frame uses wire protocol version `4`.
-2. The agent release matches `~> 1.1.0`.
-3. The token matches using constant-time comparison.
-4. The node name is valid.
-5. No connected client already owns that node name.
+1. The agent release matches `~> 1.2.0`.
+2. The token matches using constant-time comparison.
+3. The node name is valid and available.
 
 The wire protocol version and agent release version are independent.
 
@@ -115,14 +101,14 @@ The payload is:
 %{
   "version" => "1",
   "digest" => "<lowercase SHA-256 hex>",
-  "modules" => [
-    {ModuleName, beam_binary, filename},
+  "modules" => %{
+    "Elixir.Exdock.AgentRuntime" => beam_bytes,
     ...
-  ]
+  }
 }
 ```
 
-The digest covers the module names and bytecode, but not filenames.
+The digest covers the module names and bytecode. The agent maps names through the fixed allowlist.
 
 The client validates the complete digest and requires exactly the four modules
 listed above, with no duplicates or additional modules. It loads each module
@@ -147,7 +133,7 @@ After the runtime starts, the client echoes:
   "digest" => "<received bundle digest>",
   "metadata" => %{
     "platform" => "linux/amd64",
-    "agent_version" => "1.1.0",
+    "agent_version" => "1.2.0",
     "elixir_version" => "<Elixir version>",
     "otp_release" => "<OTP release>"
   }
@@ -301,8 +287,8 @@ and a final result:
 
 ## Heartbeats, errors, and reconnection
 
-The client sends an empty heartbeat every ten seconds. Each heartbeat resets the
-server's 30-second timeout.
+Both peers tick NodeWire every 500 ms. NodeWire sends ping/pong heartbeats on
+a ten-second interval and closes an idle connection after 30 seconds.
 
 When a socket closes, a heartbeat times out, or a protocol error occurs:
 
@@ -312,15 +298,15 @@ When a socket closes, a heartbeat times out, or a protocol error occurs:
 - in-flight jobs receive synthetic `:nodedown` results;
 - the client normally reconnects after 20 seconds.
 
-Wire-version mismatch, unsupported agent release, invalid authentication,
-duplicate node name, and invalid node name disable automatic reconnection,
-because retrying unchanged configuration cannot resolve those failures.
+An explicit unsupported agent release, invalid authentication, duplicate node
+name, or invalid node name error disables automatic reconnection. A wire
+negotiation failure closes the socket. Commands are never replayed on reconnect.
 
 ## Primary implementation files
 
 - `lib/exdock_client/lib/connection/client.ex`
 - `lib/exdock_client/lib/connection/protocol.ex`
-- `lib/exdock_client/exdock_protocol/lib/exdock/protocol/contract.ex`
+- `lib/exdock_client/exdock_protocol/lib/exdock/protocol/node_wire.ex`
 - `lib/exdock_client/exdock_protocol/lib/exdock/protocol/runtime_bundle.ex`
 - `lib/exdock/server/connection/server/tcp_supervisor.ex`
 - `lib/exdock/server/connection/handler.ex`

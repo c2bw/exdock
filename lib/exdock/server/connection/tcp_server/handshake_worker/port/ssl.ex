@@ -27,6 +27,6 @@ defmodule Exdock.Server.Connection.TCPServer.HandshakeWorker.Port.SSL do
     do: Connection.Handler.stop(handler_pid, reason)
 
   @impl true
-  def activate_handler(_context, handler_pid),
-    do: Connection.Handler.activate_socket(handler_pid)
+  def activate_handler(_context, handler_pid, max_frame_size),
+    do: Connection.Handler.activate_socket(handler_pid, max_frame_size)
 end

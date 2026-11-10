@@ -106,13 +106,13 @@ defmodule Exdock.Server.Connection.TCPServer.HandshakeWorker do
   defp handoff_to_handler(client_socket, handler_pid, %Context{} = context) do
     with :ok <- set_client_socket_options(client_socket, handler_pid, context),
          :ok <- transfer_client_socket(client_socket, handler_pid, context),
-         :ok <- context.port.activate_handler(context.port_context, handler_pid) do
+         :ok <- context.port.activate_handler(context.port_context, handler_pid, context.max_frame_size) do
       :ok
     end
   end
 
   defp set_client_socket_options(client_socket, handler_pid, %Context{} = context) do
-    case context.port.setopts(context.port_context, client_socket, tcp_options(context)) do
+    case context.port.setopts(context.port_context, client_socket, tcp_options()) do
       :ok ->
         Logger.debug("Successfully set TCP options")
         :ok
@@ -137,11 +137,10 @@ defmodule Exdock.Server.Connection.TCPServer.HandshakeWorker do
     end
   end
 
-  defp tcp_options(%Context{} = context) do
+  defp tcp_options() do
     [
       :binary,
-      packet: 4,
-      packet_size: context.max_frame_size,
+      packet: :raw,
       active: false,
       send_timeout: 5_000,
       send_timeout_close: true,

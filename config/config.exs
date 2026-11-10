@@ -12,7 +12,7 @@ config :exdock,
   generators: [timestamp_type: :utc_datetime, binary_id: false],
   docker_engine_adapter: Exdock.Docker.Engine.Local,
   state_effect_runner: Exdock.Server.State.EffectRunner,
-  tcp_max_frame_size: 16 * 1024 * 1024,
+  tcp_max_frame_size: 8_388_626,
   login_rate_limit: [max_attempts: 100, window_ms: 5 * 60_000],
   trusted_proxy_ips: []
 

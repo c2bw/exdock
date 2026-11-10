@@ -1,8 +1,8 @@
 defmodule Exdock.Client.Connection.RuntimeInstallerTest do
   use ExUnit.Case, async: false
 
-  alias Exdock.Client.Connection.RuntimeInstaller
-  alias Exdock.Protocol.RuntimeBundle
+  alias Exdock.Client.Connection.{Protocol, RuntimeInstaller}
+  alias Exdock.Protocol.{Contract, RuntimeBundle}
 
   setup do
     start_supervised!({Registry, keys: :unique, name: Exdock.AgentRegistry})
@@ -18,25 +18,6 @@ defmodule Exdock.Client.Connection.RuntimeInstallerTest do
     refute RuntimeInstaller.allowed_module?(Exdock.AgentRuntime.Unexpected)
     refute RuntimeInstaller.allowed_module?(Exdock.Client.Connection.TCPClient)
     refute RuntimeInstaller.allowed_module?("Elixir.Exdock.AgentRuntime")
-  end
-
-  test "prepares runtime module atoms for safe bundle decoding" do
-    assert :ok = RuntimeInstaller.prepare()
-
-    payload =
-      :erlang.term_to_binary(%{
-        "version" => "1",
-        "digest" => "digest",
-        "modules" => [
-          {Exdock.AgentRuntime, <<1>>, ~c"runtime.beam"},
-          {Exdock.AgentRuntime.Executor, <<2>>, ~c"executor.beam"},
-          {Exdock.AgentRuntime.Size, <<3>>, ~c"size.beam"},
-          {Exdock.AgentRuntime.Wire, <<4>>, ~c"wire.beam"}
-        ]
-      })
-
-    assert %{"modules" => modules} = :erlang.binary_to_term(payload, [:safe])
-    assert length(modules) == 4
   end
 
   test "rejects malformed and disallowed bundles before loading code" do

@@ -8,7 +8,11 @@ defmodule Exdock.Server.Connection.Handler.FrameRouter do
 
   alias Exdock.Server.Connection.{Protocol, Session}
 
-  @spec route(Session.t(), binary()) :: term()
+  @spec route(Session.t(), binary() | {atom(), map()}) :: term()
+  def route(%Session{} = session, event) when is_tuple(event) do
+    Session.route(session, Protocol.decode_event(event, Session.trust(session)))
+  end
+
   def route(%Session{} = session, frame) when is_binary(frame) do
     frame
     |> Protocol.decode_message(Session.trust(session))

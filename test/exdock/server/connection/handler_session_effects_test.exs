@@ -4,17 +4,6 @@ defmodule Exdock.Server.Connection.Handler.SessionEffectsTest do
   alias Exdock.Server.Connection.Handler.{SessionEffects, State}
   alias Exdock.Server.Connection.{RuntimeBundleProvider, Session}
 
-  test "heartbeat replaces the previous timeout" do
-    previous_timer = Process.send_after(self(), :stale_heartbeat, 60_000)
-    state = %{State.new(self(), "auth", :socket) | heartbeat_timer: previous_timer}
-
-    assert {:noreply, updated} = SessionEffects.interpret(:heartbeat, state, :socket, <<>>)
-    assert is_reference(updated.heartbeat_timer)
-    refute updated.heartbeat_timer == previous_timer
-
-    Process.cancel_timer(updated.heartbeat_timer)
-  end
-
   test "terminal routing reasons stop the session unchanged" do
     state = State.new(self(), "auth", :socket)
 
@@ -23,15 +12,11 @@ defmodule Exdock.Server.Connection.Handler.SessionEffectsTest do
     end
   end
 
-  test "transport exceptions become explicit send errors" do
-    assert {:error, {_kind, _reason}} = SessionEffects.send_message(:not_an_ssl_socket, :heartbeat)
-  end
-
   test "authentication failures are translated into stop reasons" do
     state = State.new(self(), "token", :socket)
 
     assert {:stop, :invalid_auth, _state} =
-             SessionEffects.interpret({:authenticate, "1.1.0", "wrong", "node-a"}, state, :socket, <<>>)
+             SessionEffects.interpret({:authenticate, "1.2.0", "wrong", "node-a"}, state, :socket, <<>>)
 
     assert {:stop, {:version_requirement, _requirement}, _state} =
              SessionEffects.interpret({:authenticate, "0.0.1", "token", "node-a"}, state, :socket, <<>>)

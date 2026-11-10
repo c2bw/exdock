@@ -31,8 +31,8 @@ defmodule Exdock.Server.Connection.SessionTest do
   test "routes only messages valid for the current phase" do
     awaiting_hello = Session.new()
 
-    assert {:authenticate, "1.1.0", "token", "node-a"} =
-             Session.route(awaiting_hello, {:hello, "1.1.0", "token", "node-a"})
+    assert {:authenticate, "1.2.0", "token", "node-a"} =
+             Session.route(awaiting_hello, {:hello, "1.2.0", "token", "node-a"})
 
     assert {:stop, :unauthorized} =
              Session.route(awaiting_hello, {:client_message, :too_early})

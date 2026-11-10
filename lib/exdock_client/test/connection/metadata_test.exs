@@ -23,10 +23,10 @@ defmodule Exdock.Client.Connection.MetadataTest do
   test "collects all required metadata fields" do
     assert %{
              "platform" => platform,
-             "agent_version" => "1.1.0",
+             "agent_version" => "1.2.0",
              "elixir_version" => elixir_version,
              "otp_release" => otp_release
-           } = Metadata.collect("1.1.0")
+           } = Metadata.collect("1.2.0")
 
     assert is_binary(platform) and platform != ""
     assert elixir_version == System.version()

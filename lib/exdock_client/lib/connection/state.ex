@@ -17,6 +17,7 @@ defmodule Exdock.Client.Connection.State do
             session: %Session{phase: :disconnected, reconnect_enabled: true},
             reconnect_timer: nil,
             heartbeat_timer: nil,
+            wire: nil,
             transport: Transport,
             timer: Timer,
             runtime_executor: RuntimeExecutor
@@ -30,6 +31,7 @@ defmodule Exdock.Client.Connection.State do
           session: Session.t(),
           reconnect_timer: reference() | nil,
           heartbeat_timer: reference() | nil,
+          wire: NodeWire.Session.t() | nil,
           transport: module(),
           timer: module(),
           runtime_executor: module()

@@ -8,7 +8,7 @@ defmodule Exdock.Client.Connection.Timer do
   @behaviour __MODULE__
 
   @impl true
-  def heartbeat(interval), do: Process.send_after(self(), :heartbeat, interval)
+  def heartbeat(interval), do: :erlang.start_timer(interval, self(), :wire_tick)
 
   @impl true
   def reconnect(interval), do: :erlang.start_timer(interval, self(), :try_reconnect)

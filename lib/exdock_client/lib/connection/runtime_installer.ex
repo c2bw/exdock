@@ -40,18 +40,6 @@ defmodule Exdock.Client.Connection.RuntimeInstaller do
      }}
   end
 
-  @doc """
-  Loads the fixed runtime-module atom allowlist before a bundle is decoded.
-
-  Runtime bundles are decoded with `binary_to_term/2` in safe mode. The module
-  atoms in a bundle must therefore already exist in the standalone client VM.
-  """
-  @spec prepare() :: :ok
-  def prepare do
-    Enum.each(RuntimeBundle.required_modules(), &Atom.to_string/1)
-    :ok
-  end
-
   @spec install(map(), String.t(), module(), GenServer.server()) :: :ok | {:error, term()}
   def install(bundle, client_name, runtime_module \\ Exdock.AgentRuntime, server \\ __MODULE__)
 

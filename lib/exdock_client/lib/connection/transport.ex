@@ -8,6 +8,7 @@ defmodule Exdock.Client.Connection.Transport do
               timeout()
             ) :: {:ok, :ssl.sslsocket()} | {:error, term()}
   @callback send(:ssl.sslsocket(), iodata()) :: :ok | {:error, term()}
+  @callback activate(:ssl.sslsocket()) :: :ok | {:error, term()}
   @callback close(:ssl.sslsocket()) :: :ok | {:error, term()}
 
   @behaviour __MODULE__
@@ -17,6 +18,9 @@ defmodule Exdock.Client.Connection.Transport do
 
   @impl true
   def send(socket, data), do: :ssl.send(socket, data)
+
+  @impl true
+  def activate(socket), do: :ssl.setopts(socket, active: :once)
 
   @impl true
   def close(socket), do: :ssl.close(socket)

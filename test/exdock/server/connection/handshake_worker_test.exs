@@ -7,7 +7,7 @@ defmodule Exdock.Server.Connection.HandshakeWorkerTest do
   test "reports a socket handoff timeout" do
     assert {:error, :socket_handoff_timeout} =
              HandshakeWorker.await_handoff(:server, :handler_supervisor, "auth",
-               max_frame_size: 128,
+               max_frame_size: 1024,
                socket_handoff_timeout: 0
              )
   end
@@ -22,7 +22,7 @@ defmodule Exdock.Server.Connection.HandshakeWorkerTest do
                HandshakeWorker.await_handoff(:server, :handler_supervisor, "auth",
                  port: HandshakePortFake,
                  port_context: %{owner: owner, scenario: :handshake_failure},
-                 max_frame_size: 128,
+                 max_frame_size: 1024,
                  handshake_timeout: 25
                )
     end)
@@ -39,12 +39,12 @@ defmodule Exdock.Server.Connection.HandshakeWorkerTest do
              HandshakeWorker.await_handoff(:server, :handler_supervisor, "auth",
                port: HandshakePortFake,
                port_context: %{owner: owner, scenario: :success},
-               max_frame_size: 128
+               max_frame_size: 1024
              )
 
     assert_receive {:socket_options, options}
-    assert options[:packet] == 4
-    assert options[:packet_size] == 128
+    assert options[:packet] == :raw
+    assert_receive {:activated, 1024}
     assert options[:active] == false
     assert options[:send_timeout_close]
   end
@@ -57,7 +57,7 @@ defmodule Exdock.Server.Connection.HandshakeWorkerTest do
              HandshakeWorker.start(:accepted_socket, :server, :handler_supervisor, "auth",
                port: HandshakePortFake,
                port_context: %{owner: owner, scenario: :handoff_failure},
-               max_frame_size: 128,
+               max_frame_size: 1024,
                task_supervisor: task_supervisor
              )
 

@@ -32,6 +32,7 @@ defmodule Exdock.Client.Connection.Transition do
       state
       | session: session,
         socket: nil,
+        wire: nil,
         heartbeat_timer: nil,
         reconnect_timer: retained_reconnect_timer(state.reconnect_timer, reconnect?)
     }

@@ -196,10 +196,10 @@ defmodule Exdock.Client.Connection.RuntimeInstallerTest do
 
     previous_pid = Process.whereis(Exdock.ClientLib)
 
-    assert :ok =
-             "2"
-             |> RuntimeBundle.build(replacement)
-             |> RuntimeInstaller.install("node-a", Exdock.AgentRuntime)
+    bundle = RuntimeBundle.build("2", replacement)
+    frame = Contract.encode!(:runtime_bundle, bundle)
+    assert {:runtime_bundle, decoded} = Protocol.decode_message(frame)
+    assert :ok = RuntimeInstaller.install(decoded, "node-a", Exdock.AgentRuntime)
 
     replacement_pid = Process.whereis(Exdock.ClientLib)
     assert is_pid(replacement_pid)

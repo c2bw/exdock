@@ -16,7 +16,7 @@ defmodule Exdock.Server.Connection.Handler.SessionEffectsTest do
     state = State.new(self(), "token", :socket)
 
     assert {:stop, :invalid_auth, _state} =
-             SessionEffects.interpret({:authenticate, "1.2.0", "wrong", "node-a"}, state, :socket, <<>>)
+             SessionEffects.interpret({:authenticate, "1.3.0", "wrong", "node-a"}, state, :socket, <<>>)
 
     assert {:stop, {:version_requirement, _requirement}, _state} =
              SessionEffects.interpret({:authenticate, "0.0.1", "token", "node-a"}, state, :socket, <<>>)

@@ -6,9 +6,9 @@ defmodule Exdock.Protocol.Compatibility do
   compatibility are independent contracts and are versioned separately.
   """
 
-  @wire_version 5
-  @agent_version "1.2.0"
-  @agent_requirement "~> 1.2.0"
+  @wire_version 6
+  @agent_version "1.3.0"
+  @agent_requirement "~> 1.3.0"
   @runtime_bundle_version "1"
 
   @spec wire_version() :: pos_integer()

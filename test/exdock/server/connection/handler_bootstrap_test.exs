@@ -16,7 +16,7 @@ defmodule Exdock.Server.Connection.Handler.BootstrapTest do
     end
 
     assert {:ok, state, ^bundle} =
-             Bootstrap.authenticate(handler_state(), "1.2.0", "token", "node-a",
+             Bootstrap.authenticate(handler_state(), "1.3.0", "token", "node-a",
                register: register,
                build_bundle: fn -> {:ok, bundle} end
              )
@@ -34,7 +34,7 @@ defmodule Exdock.Server.Connection.Handler.BootstrapTest do
     end
 
     assert {:error, :invalid_auth, state} =
-             Bootstrap.authenticate(handler_state(), "1.2.0", "wrong-token", "node-a", register: register)
+             Bootstrap.authenticate(handler_state(), "1.3.0", "wrong-token", "node-a", register: register)
 
     assert state.session.client_name == "node-a"
     refute Session.registered?(state.session)
@@ -42,7 +42,7 @@ defmodule Exdock.Server.Connection.Handler.BootstrapTest do
 
   test "keeps successful registration visible when bundle construction fails" do
     assert {:error, :load_module_fail, state} =
-             Bootstrap.authenticate(handler_state(), "1.2.0", "token", "node-a",
+             Bootstrap.authenticate(handler_state(), "1.3.0", "token", "node-a",
                register: fn _client_name, _handler -> :ok end,
                build_bundle: fn -> {:error, :load_module_fail} end
              )

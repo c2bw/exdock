@@ -96,7 +96,7 @@ defmodule Exdock.Server.Connection.ProtocolTest do
     payload = Message.result("refresh-id", "node_refresh", "node", %{"containers" => []}, nil)
 
     assert {:error, :malformed_message} =
-             Protocol.decode_message(Contract.encode!(:result, payload), :authenticated)
+             Protocol.decode_event({:result, payload}, :authenticated)
 
     malformed_snapshot = %{
       "containers" => %{"ok" => [%{}], "errored" => []},

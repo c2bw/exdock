@@ -33,9 +33,19 @@ defmodule Exdock.Protocol.Channel do
   def tick(session, write), do: session |> Session.tick(now()) |> apply_effects(write)
 
   def send_event(session, {name, payload}, write) do
-    with {:ok, payload} <- Payload.encode(name, payload),
-         {:ok, nil, session, effects} <- Session.send_event(session, name, payload, now(), ack: false) do
-      apply_effects({:ok, session, effects}, write)
+    with {:ok, payload} <- Payload.encode(name, payload) do
+      case Session.send_event(session, name, payload, now(), ack: false) do
+        {:ok, nil, session, effects} -> apply_effects({:ok, session, effects}, write)
+        {:error, %Session.Error{code: :invalid_payload}} = error -> encoding_error(name, payload, error)
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp encoding_error(name, payload, error) do
+    case NodeWire.encode(name, payload) do
+      {:ok, _frame} -> error
+      {:error, _reason} = error -> error
     end
   end
 

@@ -14,9 +14,9 @@ defmodule Exdock.ReleaseMetadataTest do
     assert metadata["packages"] == %{"server" => "0.1.1", "agent" => "0.1.1", "runtime" => "0.1.0", "protocol" => "0.1.0"}
 
     assert metadata["compatibility"] == %{
-             "wire" => 5,
-             "agent" => "1.2.0",
-             "agent_requirement" => "~> 1.2.0",
+             "wire" => 6,
+             "agent" => "1.3.0",
+             "agent_requirement" => "~> 1.3.0",
              "runtime_bundle" => "1"
            }
 

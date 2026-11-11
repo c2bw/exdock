@@ -74,4 +74,42 @@ defmodule Exdock.Server.Connection.ProtocolCompatibilityTest do
     assert {:client_message, %WireMessage{type: :result, data: {"container", ^logs}}} =
              ServerProtocol.decode_message(frame, :authenticated)
   end
+
+  test "refreshes a node whose combined inspections exceed the JSON tree limit" do
+    inspect = %{"Config" => %{"Env" => List.duplicate("EXAMPLE=value", 500)}}
+
+    snapshots =
+      for i <- 1..40 do
+        %{
+          "id" => "container-#{i}",
+          "name" => "service-#{i}",
+          "is_running" => true,
+          "stack_name" => nil,
+          "image_tag" => "app:latest",
+          "image_id" => "sha256:app",
+          "inspect" => inspect,
+          "resources" => nil
+        }
+      end
+
+    data = %{
+      "containers" => %{"ok" => snapshots, "errored" => [{"partial inspection", hd(snapshots)}]},
+      "images" => %{"ok" => [], "errored" => []}
+    }
+
+    result = Message.result("refresh", "node_refresh", "node", data, nil)
+    unpacked = put_in(result, ["data", "containers", "errored"], [])
+
+    assert {:error, %NodeWire.Error{code: :constraint_violation}} =
+             Exdock.Protocol.NodeWire.encode(:result, unpacked)
+
+    frame = ClientProtocol.encode_message({:result, result})
+
+    assert {:client_message, %WireMessage{data: {containers, %{ok: []}}, error: nil}} =
+             ServerProtocol.decode_message(frame, :authenticated)
+
+    assert Enum.map(containers.ok, & &1.id) == Enum.map(snapshots, & &1["id"])
+    assert Enum.all?(containers.ok, &(&1.inspect == inspect))
+    assert [{"partial inspection", %{id: "container-1"}}] = containers.errored
+  end
 end

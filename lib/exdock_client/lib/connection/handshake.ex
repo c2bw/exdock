@@ -120,9 +120,15 @@ defmodule Exdock.Client.Connection.Handshake do
         {:ok, state} ->
           state
 
+        {:error, %NodeWire.Error{code: code, path: path}} ->
+          send_encoding_failure(state, message, code, path)
+
+        {:error, :invalid_refresh_payload} ->
+          send_encoding_failure(state, message, :invalid_refresh_payload, [])
+
         {:error, %NodeWire.Session.Error{code: code}}
         when code in [:frame_too_large, :invalid_payload] ->
-          send_size_failure(state, message)
+          send_encoding_failure(state, message, code, [])
 
         {:error, reason} ->
           EffectRunner.disconnect(state, "NodeWire send: #{inspect(reason)}")
@@ -132,14 +138,21 @@ defmodule Exdock.Client.Connection.Handshake do
     end
   end
 
-  defp send_size_failure(state, {:result, %{"kind" => kind} = result}) do
+  defp send_encoding_failure(state, {:result, %{"kind" => kind} = result}, code, path) do
+    Logger.warning("NodeWire rejected #{kind} result with #{code} at #{inspect(path)}")
+
     data =
       if kind == "node_refresh" do
         empty = %{"ok" => [], "errored" => []}
         %{"containers" => empty, "images" => empty}
       end
 
-    failure = %{result | "data" => data, "error" => "Result could not be encoded within the agent wire limits"}
+    error =
+      if code in [:constraint_violation, :frame_too_large, :payload_too_large],
+        do: "Agent result exceeds a NodeWire payload limit (#{code})",
+        else: "Agent result failed NodeWire validation (#{code})"
+
+    failure = %{result | "data" => data, "error" => error}
 
     case send_message(state, {:result, failure}) do
       {:ok, state} -> state
@@ -147,7 +160,10 @@ defmodule Exdock.Client.Connection.Handshake do
     end
   end
 
-  defp send_size_failure(state, _message), do: state
+  defp send_encoding_failure(state, {name, _payload}, code, path) do
+    Logger.warning("NodeWire rejected #{name} event with #{code} at #{inspect(path)}")
+    state
+  end
 
   defp schedule_heartbeat(state), do: state.timer.heartbeat(Channel.tick_interval())
 

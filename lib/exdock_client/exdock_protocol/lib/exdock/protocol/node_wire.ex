@@ -1,7 +1,7 @@
 defmodule Exdock.Protocol.NodeWire do
   @moduledoc "Agent application messages carried by a NodeWire session."
 
-  use NodeWire.Protocol, id: 0x4558444F, version: 5, max_payload_bytes: 8_388_608
+  use NodeWire.Protocol, id: 0x4558444F, version: 6, max_payload_bytes: 8_388_608
 
   message :hello, id: 10 do
     field(:agent_version, :string, required: true)

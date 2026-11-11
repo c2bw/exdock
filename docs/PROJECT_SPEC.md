@@ -179,7 +179,7 @@ the connection initialized. It also reports bounded, validated metadata for the
 agent platform, agent version, Elixir version, and OTP release. This metadata is
 kept only for the lifetime of the connected node and is not persisted.
 
-Wire version 5 requires a coordinated server and agent rollout. Both peers
+Wire version 6 requires a coordinated server and agent rollout. Both peers
 must use the NodeWire application contract.
 
 The runtime bundle contains exactly `Exdock.AgentRuntime`,

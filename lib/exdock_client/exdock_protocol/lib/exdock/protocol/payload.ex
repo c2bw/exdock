@@ -46,7 +46,9 @@ defmodule Exdock.Protocol.Payload do
   end
 
   def encode(:result, %{"kind" => "node_refresh", "data" => data, "error" => error} = payload) do
-    {:ok, %{payload | "data" => encode_refresh(data), "error" => json_value(error)}}
+    with {:ok, data} <- encode_refresh(data) do
+      {:ok, %{payload | "data" => data, "error" => json_value(error)}}
+    end
   end
 
   def encode(_name, payload) when is_map(payload), do: {:ok, json_value(payload)}
@@ -90,7 +92,9 @@ defmodule Exdock.Protocol.Payload do
   def decode(:result, %{"kind" => "container_logs"}), do: {:error, :invalid_logs}
 
   def decode(:result, %{"kind" => "node_refresh", "data" => data} = payload) do
-    {:ok, %{payload | "data" => decode_refresh(data)}}
+    with {:ok, data} <- decode_refresh(data) do
+      {:ok, %{payload | "data" => data}}
+    end
   end
 
   def decode(_name, payload), do: {:ok, payload}
@@ -108,44 +112,68 @@ defmodule Exdock.Protocol.Payload do
     end
   end
 
-  defp encode_refresh(%{"containers" => containers, "images" => images}) do
-    %{"containers" => encode_result_set(containers), "images" => encode_result_set(images)}
+  # Apply the JSON parser's structural limits to each inspection independently.
+  # The outer NodeWire frame still limits the total bytes and record count.
+  defp encode_refresh(data), do: map_refresh_sets(data, &encode_result_set/1)
+  defp decode_refresh(data), do: map_refresh_sets(data, &decode_result_set/1)
+
+  defp map_refresh_sets(%{"containers" => containers, "images" => images}, mapper) do
+    with {:ok, containers} <- mapper.(containers),
+         {:ok, images} <- mapper.(images) do
+      {:ok, %{"containers" => containers, "images" => images}}
+    end
   end
 
-  defp encode_refresh(other), do: json_value(other)
+  defp map_refresh_sets(_data, _mapper), do: {:error, :invalid_refresh_payload}
 
-  defp encode_result_set(%{"ok" => values, "errored" => errors}) when is_list(errors) do
-    %{
-      "ok" => json_value(values),
-      "errored" =>
-        Enum.map(errors, fn
-          {error, snapshot} when is_map(snapshot) -> %{"error" => json_value(error), "snapshot" => json_value(snapshot)}
-          error -> %{"error" => json_value(error)}
-        end)
-    }
+  defp encode_result_set(%{"ok" => values, "errored" => errors}) when is_list(values) and is_list(errors) do
+    errors =
+      Enum.map(errors, fn
+        {error, snapshot} when is_map(snapshot) -> %{"error" => error, "snapshot" => snapshot}
+        error -> %{"error" => error}
+      end)
+
+    with {:ok, values} <- traverse(values, &encode_snapshot/1),
+         {:ok, errors} <- traverse(errors, &encode_snapshot/1) do
+      {:ok, %{"ok" => values, "errored" => errors}}
+    end
   end
 
-  defp encode_result_set(other), do: json_value(other)
+  defp encode_result_set(_set), do: {:error, :invalid_refresh_payload}
 
-  defp decode_refresh(%{"containers" => containers, "images" => images}) do
-    %{"containers" => decode_result_set(containers), "images" => decode_result_set(images)}
+  defp decode_result_set(%{"ok" => values, "errored" => errors}) when is_list(values) and is_list(errors) do
+    with {:ok, values} <- traverse(values, &decode_snapshot/1),
+         {:ok, errors} <- traverse(errors, &decode_snapshot_error/1) do
+      {:ok, %{"ok" => values, "errored" => errors}}
+    end
   end
 
-  defp decode_refresh(other), do: other
+  defp decode_result_set(_set), do: {:error, :invalid_refresh_payload}
 
-  defp decode_result_set(%{"errored" => errors} = set) when is_list(errors) do
-    %{
-      set
-      | "errored" =>
-          Enum.map(errors, fn
-            %{"error" => error, "snapshot" => snapshot} -> {error, snapshot}
-            %{"error" => error} -> error
-            other -> other
-          end)
-    }
+  defp encode_snapshot(snapshot) when is_map(snapshot) do
+    snapshot = json_value(snapshot)
+    with :ok <- NodeWire.Schema.bounds(snapshot), do: {:ok, JSON.encode!(snapshot)}
   end
 
-  defp decode_result_set(other), do: other
+  defp encode_snapshot(_snapshot), do: {:error, :invalid_refresh_payload}
+
+  defp decode_snapshot(snapshot) when is_binary(snapshot) do
+    with {:ok, value} <- NodeWire.JSON.decode(snapshot),
+         :ok <- NodeWire.Schema.bounds(value) do
+      {:ok, value}
+    end
+  end
+
+  defp decode_snapshot(_snapshot), do: {:error, :invalid_refresh_payload}
+
+  defp decode_snapshot_error(snapshot) do
+    case decode_snapshot(snapshot) do
+      {:ok, %{"error" => error, "snapshot" => snapshot}} when is_map(snapshot) -> {:ok, {error, snapshot}}
+      {:ok, %{"error" => error}} -> {:ok, error}
+      {:ok, _snapshot} -> {:error, :invalid_refresh_payload}
+      {:error, _reason} = error -> error
+    end
+  end
 
   defp decode_log_option([key, value]) do
     case Enum.find(@log_options, &(Atom.to_string(&1) == key)) do

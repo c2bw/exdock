@@ -28,7 +28,7 @@ Client                                      Server
 ## Transport and framing
 
 The agent opens a raw binary TLS socket. Each peer owns a NodeWire session
-that negotiates Exdock application protocol version 5 by exact manifest
+that negotiates Exdock application protocol version 6 by exact manifest
 fingerprint. The session accepts fragmented and coalesced TLS chunks and
 validates each application payload against the shared JSON schema. The maximum
 application payload is 8 MiB. The server allows up to 128 concurrent TLS
@@ -69,7 +69,7 @@ After TLS and NodeWire negotiation succeed, the client sends:
 
 ```elixir
 %{
-  "agent_version" => "1.2.0",
+  "agent_version" => "1.3.0",
   "auth_token" => "<uppercase SHA-256 Base16 token>",
   "node" => "<configured node name>"
 }
@@ -77,7 +77,7 @@ After TLS and NodeWire negotiation succeed, the client sends:
 
 The server accepts `hello` to begin authentication and checks:
 
-1. The agent release matches `~> 1.2.0`.
+1. The agent release matches `~> 1.3.0`.
 2. The token matches using constant-time comparison.
 3. The node name is valid and available.
 
@@ -133,7 +133,7 @@ After the runtime starts, the client echoes:
   "digest" => "<received bundle digest>",
   "metadata" => %{
     "platform" => "linux/amd64",
-    "agent_version" => "1.2.0",
+    "agent_version" => "1.3.0",
     "elixir_version" => "<Elixir version>",
     "otp_release" => "<OTP release>"
   }

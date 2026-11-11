@@ -7,13 +7,13 @@ defmodule Exdock.Protocol.ContractTest do
 
   test "keeps coordinated compatibility values in one contract" do
     assert Compatibility.wire_version() == Contract.current_version()
-    assert Compatibility.agent_version() == "1.2.0"
-    assert Compatibility.agent_requirement() == "~> 1.2.0"
+    assert Compatibility.agent_version() == "1.3.0"
+    assert Compatibility.agent_requirement() == "~> 1.3.0"
     assert Compatibility.runtime_bundle_version() == "1"
   end
 
   test "uses the NodeWire application contract" do
-    hello = %{"agent_version" => "1.2.0", "auth_token" => "token", "node" => "node-a"}
+    hello = %{"agent_version" => "1.3.0", "auth_token" => "token", "node" => "node-a"}
     assert {:ok, {:hello, ^hello}} = hello |> then(&Contract.encode!(:hello, &1)) |> Contract.decode()
     assert {:error, %NodeWire.Error{}} = Contract.decode(<<4, 10, 131>>)
   end

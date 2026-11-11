@@ -31,10 +31,10 @@ defmodule Exdock.Server.Connection.HandlerTest do
   end
 
   test "handshake validates release, credentials, and bundle acknowledgement" do
-    assert :ok = Handshake.validate_client("1.2.0", "same-token", "same-token")
-    assert {:error, :invalid_auth} = Handshake.validate_client("1.2.0", "same-token", "wrong-token")
+    assert :ok = Handshake.validate_client("1.3.0", "same-token", "same-token")
+    assert {:error, :invalid_auth} = Handshake.validate_client("1.3.0", "same-token", "wrong-token")
 
-    assert {:error, {:version_requirement, "~> 1.2.0"}} =
+    assert {:error, {:version_requirement, "~> 1.3.0"}} =
              Handshake.validate_client("2.0.0", "same-token", "same-token")
 
     assert Handshake.ready?("1", "digest", "1", "digest")

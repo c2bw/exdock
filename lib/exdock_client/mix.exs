@@ -36,6 +36,7 @@ defmodule ExdockClient.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:node_wire, git: "https://git.lan.mangekyo.live/scorpion/nodewire"},
       {:exdock_protocol, path: "exdock_protocol"},
       {:exdock_client_runtime, path: "../exdock_client_runtime"},
       {:hackney, "~> 1.20"}

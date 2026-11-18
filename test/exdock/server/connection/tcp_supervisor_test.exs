@@ -1,113 +1,104 @@
 defmodule Exdock.Server.Connection.TCPSupervisorTest do
   use ExUnit.Case, async: false
-
   alias Exdock.Server.Connection
-  alias Exdock.Server.Connection.TCPServer
-  alias Exdock.Server.Connection.TCPServer.HandlerSupervisor
+
+  defp start_server do
+    start_supervised!({Connection.Supervisor, {"test-auth-token", 0}})
+    NodeWire.Server.port(Exdock.AgentServer)
+  end
+
+  defp tls(port) do
+    :ssl.connect(
+      ~c"localhost",
+      port,
+      [
+        verify: :verify_none,
+        active: false,
+        mode: :binary,
+        packet: 4,
+        server_name_indication: ~c"localhost",
+        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
+      ],
+      1000
+    )
+  end
+
+  defp connect(port) do
+    {:ok, socket} = tls(port)
+
+    hello =
+      NodeWire.Negotiation.hello([Exdock.Wire.V1], [], %{
+        "node" => "bounded",
+        "agent_version" => Exdock.Protocol.Compatibility.agent_version(),
+        "auth_token" => :crypto.hash(:sha256, "test-auth-token") |> Base.encode16()
+      })
+
+    :ok = :ssl.send(socket, NodeWire.Control.encode(:hello, hello))
+    {:ok, accept} = :ssl.recv(socket, 0, 1000)
+    {:ok, :accept, _} = NodeWire.Control.decode(accept)
+    {:ok, _bundle} = :ssl.recv(socket, 0, 1000)
+    {:ok, conn} = NodeWire.Server.connection(Exdock.AgentServer, "bounded")
+    {socket, conn.owner}
+  end
+
+  test "generates a fresh self-signed certificate on each server startup" do
+    port = start_server()
+    {:ok, socket} = tls(port)
+    {:ok, first_certificate} = :ssl.peercert(socket)
+    assert :public_key.pkix_is_self_signed(first_certificate)
+    :ok = :ssl.close(socket)
+    :ok = stop_supervised(Connection.Supervisor)
+
+    port = start_server()
+    {:ok, socket} = tls(port)
+    {:ok, next_certificate} = :ssl.peercert(socket)
+    assert :public_key.pkix_is_self_signed(next_certificate)
+    refute first_certificate == next_certificate
+    :ok = :ssl.close(socket)
+  end
 
   test "a stalled TLS handshake does not block later clients" do
-    port = available_port()
-    start_supervised!({Connection.Supervisor, {"test-auth-token", port, max_frame_size: 128}})
-
-    task_supervisor = Process.whereis(TCPServer.TaskSupervisor)
-    assert :erlang.trace(task_supervisor, true, [:procs]) == 1
-
-    assert {:ok, stalled_socket} =
-             :gen_tcp.connect(~c"localhost", port, [:binary, active: false], 1_000)
-
-    assert_receive {:trace, ^task_supervisor, :spawn, handshake_worker, _mfa}, 1_000
-    assert :erlang.trace(task_supervisor, false, [:procs]) == 1
-    worker_monitor = Process.monitor(handshake_worker)
-
-    {client_socket, handler_pid} = connect_supervised_handler(port)
-    handler_monitor = Process.monitor(handler_pid)
-
-    :ssl.close(client_socket)
-    assert_receive {:DOWN, ^handler_monitor, :process, ^handler_pid, _reason}, 1_000
-
-    ExUnit.CaptureLog.capture_log(fn ->
-      :ok = :gen_tcp.close(stalled_socket)
-      assert_receive {:DOWN, ^worker_monitor, :process, ^handshake_worker, _reason}, 1_000
-    end)
+    port = start_server()
+    {:ok, stalled} = :gen_tcp.connect(~c"localhost", port, [:binary, active: false], 1000)
+    {socket, owner} = connect(port)
+    monitor = Process.monitor(owner)
+    :ssl.close(socket)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, _}, 1000
+    :gen_tcp.close(stalled)
   end
 
-  test "hands bounded sockets to dynamically supervised handlers" do
-    port = available_port()
-    start_supervised!({Connection.Supervisor, {"test-auth-token", port, max_frame_size: 128}})
+  test "native owners use bounded passive-handoff packet4 sockets" do
+    port = start_server()
+    {socket, owner} = connect(port)
+    state = :sys.get_state(owner)
+    supervisor = NodeWire.Server.child(Exdock.AgentServer, DynamicSupervisor)
 
-    {client_socket, handler_pid} = connect_supervised_handler(port)
-    state = :sys.get_state(handler_pid)
+    assert Enum.any?(DynamicSupervisor.which_children(supervisor), fn {_, pid, _, _} ->
+             pid == owner
+           end)
 
-    assert Enum.any?(
-             DynamicSupervisor.which_children(HandlerSupervisor),
-             fn {_id, pid, _type, _modules} -> pid == handler_pid end
-           )
+    {:ok, options} =
+      :ssl.getopts(state.socket, [
+        :active,
+        :packet,
+        :packet_size,
+        :send_timeout,
+        :send_timeout_close
+      ])
 
-    assert {:ok, socket_options} =
-             :ssl.getopts(
-               state.socket,
-               [:active, :packet, :packet_size, :send_timeout, :send_timeout_close]
-             )
-
-    assert socket_options[:active] == :once
-    assert socket_options[:packet] == 4
-    assert socket_options[:packet_size] == 128
-    assert socket_options[:send_timeout] == 5_000
-    assert socket_options[:send_timeout_close]
-
-    :ssl.close(client_socket)
+    assert options[:active] == :once
+    assert options[:packet] == 4
+    assert options[:packet_size] == 16_777_216
+    assert options[:send_timeout_close]
+    :ssl.close(socket)
   end
 
-  test "disconnects clients that exceed the maximum frame size" do
-    port = available_port()
-    start_supervised!({Connection.Supervisor, {"test-auth-token", port, max_frame_size: 128}})
-
-    {client_socket, handler_pid} = connect_supervised_handler(port)
-    _ = :sys.get_state(handler_pid)
-    monitor_ref = Process.monitor(handler_pid)
-
-    ExUnit.CaptureLog.capture_log(fn ->
-      assert :ok = :ssl.send(client_socket, :binary.copy(<<0>>, 129))
-      assert_receive {:DOWN, ^monitor_ref, :process, ^handler_pid, _reason}, 1_000
-    end)
-
-    :ssl.close(client_socket)
-  end
-
-  defp connect_supervised_handler(port) do
-    handler_supervisor = Process.whereis(HandlerSupervisor)
-    task_supervisor = Process.whereis(TCPServer.TaskSupervisor)
-    assert :erlang.trace(handler_supervisor, true, [:procs]) == 1
-    assert :erlang.trace(task_supervisor, true, [:procs, :set_on_spawn]) == 1
-
-    assert {:ok, client_socket} =
-             :ssl.connect(
-               ~c"localhost",
-               port,
-               [verify: :verify_none, active: false, packet: 4],
-               1_000
-             )
-
-    assert_receive {:trace, ^task_supervisor, :spawn, handshake_worker, _mfa}, 1_000
-    worker_monitor = Process.monitor(handshake_worker)
-    assert_receive {:trace, ^handler_supervisor, :spawn, handler_pid, _mfa}, 1_000
-    assert :erlang.trace(handler_supervisor, false, [:procs]) == 1
-    assert :erlang.trace(task_supervisor, false, [:procs, :set_on_spawn]) == 1
-    # TLS connect may return after the handoff worker has already exited. Its
-    # inherited trace proves a normal exit even if the later monitor sees noproc.
-    assert_receive {:trace, ^handshake_worker, :exit, :normal}, 1_000
-
-    assert_receive {:DOWN, ^worker_monitor, :process, ^handshake_worker, reason}
-                   when reason in [:normal, :noproc],
-                   1_000
-
-    {client_socket, handler_pid}
-  end
-
-  defp available_port do
-    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false])
-    {:ok, {_address, port}} = :inet.sockname(socket)
-    :ok = :gen_tcp.close(socket)
-    port
+  test "oversized bootstrap packets are closed before authentication" do
+    port = start_server()
+    {:ok, socket} = tls(port)
+    :ok = :ssl.send(socket, :binary.copy(<<0>>, 16_385))
+    assert {:error, _} = :ssl.recv(socket, 0, 1000)
+    assert NodeWire.Server.connections(Exdock.AgentServer) == []
+    :ssl.close(socket)
   end
 end

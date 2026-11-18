@@ -2,7 +2,7 @@ defmodule Exdock.Server.SupervisorTest do
   use Exdock.DataCase, async: false
 
   alias Exdock.Server.Connection.TCPServer
-  alias Exdock.Server.Connection.TCPServer.{ClientRegistry, HandlerSupervisor}
+  alias Exdock.Server.Connection.TCPServer.ClientRegistry
 
   test "restarts the state owner and downstream dependencies when it crashes" do
     supervisor_pid =
@@ -70,9 +70,9 @@ defmodule Exdock.Server.SupervisorTest do
       connection_supervisor: Process.whereis(Exdock.Server.Connection.Supervisor),
       client_registry: Process.whereis(ClientRegistry),
       tcp_server: Process.whereis(TCPServer),
-      handler_supervisor: Process.whereis(HandlerSupervisor),
-      tcp_supervisor: Process.whereis(TCPServer.TCPSupervisor),
-      handshake_supervisor: Process.whereis(TCPServer.TaskSupervisor),
+      handler_supervisor: NodeWire.Server.child(Exdock.AgentServer, DynamicSupervisor),
+      tcp_supervisor: Process.whereis(Exdock.AgentServer),
+      handshake_supervisor: NodeWire.Server.child(Exdock.AgentServer, Task.Supervisor),
       vault: Process.whereis(Exdock.Database.Vault),
       broadcast: Process.whereis(Exdock.Server.Broadcast),
       jobs: Process.whereis(Exdock.Server.Jobs),

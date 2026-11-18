@@ -14,7 +14,7 @@ defmodule Exdock.Application do
   @impl true
   def start(_type, _args) do
     package_version = Application.spec(:exdock, :vsn) |> to_string()
-    protocol_version = Exdock.Protocol.Contract.current_version()
+    protocol_version = Exdock.Wire.V1.version()
 
     Logger.info("Starting Exdock server package_version=#{package_version} protocol_version=#{protocol_version}")
 

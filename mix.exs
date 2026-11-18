@@ -72,6 +72,7 @@ defmodule Exdock.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:node_wire, git: "https://git.lan.mangekyo.live/scorpion/nodewire"},
       {:exdock_protocol, path: "lib/exdock_client/exdock_protocol"},
       {:exdock_client_runtime, path: "lib/exdock_client_runtime", only: :test, runtime: false},
       {:phoenix, "~> 1.8.8"},

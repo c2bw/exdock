@@ -17,7 +17,7 @@ defmodule Exdock.Server.Connection.TCPServer do
 
   @command_dispatch_timeout 7_000
 
-  defstruct registry: ClientRegistry
+  defstruct registry: ClientRegistry, native_metadata: %{}, native_ready: %{}, registry_monitor: nil
 
   @type t :: %__MODULE__{registry: GenServer.server()}
 
@@ -37,6 +37,7 @@ defmodule Exdock.Server.Connection.TCPServer do
     # a connection-tree restart, and before new handlers can become ready.
     # The registry that owned their monitors may already be gone.
     if Keyword.get(opts, :reset_connections, false), do: ClientLifecycle.reset()
+    if match?({:nodewire, _}, Keyword.get(opts, :registry)), do: send(self(), :watch_native_registry)
     {:ok, %__MODULE__{registry: Keyword.get(opts, :registry, ClientRegistry)}}
   end
 
@@ -69,6 +70,11 @@ defmodule Exdock.Server.Connection.TCPServer do
     end
   end
 
+  def handle_call(:connected_clients, _, %{registry: {:nodewire, server}} = state) do
+    clients = NodeWire.Server.connections(server) |> Enum.filter(&(&1.phase == :ready)) |> Map.new(&{&1.identity, &1.owner})
+    {:reply, clients, state}
+  end
+
   def handle_call(:connected_clients, _from, state) do
     {:reply, ClientRegistry.connected_clients(state.registry), state}
   end
@@ -85,6 +91,60 @@ defmodule Exdock.Server.Connection.TCPServer do
     end
 
     {:noreply, state}
+  end
+
+  def handle_info(:watch_native_registry, %{registry: {:nodewire, server}} = s) do
+    registry =
+      try do
+        NodeWire.Server.child(server, NodeWire.Server.Registry)
+      catch
+        :exit, _ -> nil
+      end
+
+    if is_pid(registry) do
+      {:noreply, %{s | registry_monitor: Process.monitor(registry)}}
+    else
+      Process.send_after(self(), :watch_native_registry, 20)
+      {:noreply, s}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _, _}, %{registry_monitor: ref} = s) do
+    ClientLifecycle.reset()
+    send(self(), :watch_native_registry)
+    {:noreply, %{s | registry_monitor: nil, native_metadata: %{}, native_ready: %{}}}
+  end
+
+  def handle_info({:native_metadata, id, metadata}, s),
+    do: {:noreply, native_ready(%{s | native_metadata: Map.put(s.native_metadata, id, metadata)}, id)}
+
+  def handle_info({:nodewire, :ready, conn, _}, s),
+    do: {:noreply, native_ready(%{s | native_ready: Map.put(s.native_ready, conn.id, conn)}, conn.id)}
+
+  def handle_info({:nodewire, :disconnected, conn, _}, s) do
+    ClientLifecycle.disconnected(conn.identity)
+    {:noreply, %{s | native_metadata: Map.delete(s.native_metadata, conn.id), native_ready: Map.delete(s.native_ready, conn.id)}}
+  end
+
+  def handle_info({:nodewire, _, _, _}, s), do: {:noreply, s}
+
+  defp native_ready(s, id) do
+    with {:ok, conn} <- Map.fetch(s.native_ready, id), {:ok, metadata} <- Map.fetch(s.native_metadata, id) do
+      ClientLifecycle.ready(conn.identity, metadata)
+      %{s | native_metadata: Map.delete(s.native_metadata, id), native_ready: Map.delete(s.native_ready, id)}
+    else
+      _ -> s
+    end
+  end
+
+  defp dispatch_command(%{registry: {:nodewire, server}}, node, %Job{} = job) do
+    command = Exdock.Protocol.Message.command(job.id, job.name, job.parameters)
+
+    case NodeWire.Server.send(server, node, {:command, command}, on_sent: {:track_job, job}) do
+      :ok -> :ok
+      {:error, :not_connected} -> {:error, :node_not_connected}
+      {:error, reason} -> {:error, {:command_send_failed, reason}, nil}
+    end
   end
 
   defp dispatch_command(%__MODULE__{} = state, node, %Job{} = job) do
@@ -108,6 +168,8 @@ defmodule Exdock.Server.Connection.TCPServer do
   catch
     :exit, reason -> {:error, {:command_send_failed, {:handler_exit, reason}}}
   end
+
+  defp terminate_failed_handler(%{registry: {:nodewire, _}}, _, _), do: :ok
 
   defp terminate_failed_handler(%__MODULE__{} = state, client_name, handler) do
     # A call timeout does not terminate its callee. Wait for this exact socket

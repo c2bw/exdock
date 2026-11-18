@@ -1,0 +1,3 @@
+%{
+  "node_wire": {:git, "https://git.lan.mangekyo.live/scorpion/nodewire", "c7514ee4532bd390ba37cf56eb6f8f45c05842fd", []},
+}

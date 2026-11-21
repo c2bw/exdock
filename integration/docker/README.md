@@ -16,6 +16,7 @@ precommit pipelines:
 
 ```sh
 mix deps.get
+(cd lib/exdock_client/exdock_protocol && mix deps.get)
 (cd lib/exdock_client_runtime && mix deps.get)
 (cd lib/exdock_client && mix deps.get)
 ```

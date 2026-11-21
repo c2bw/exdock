@@ -41,6 +41,7 @@ jobs:
             precommit-v2-${{ runner.os }}-${{ runner.arch }}-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock', '**/mix.exs', 'build/**/*.exs', 'config/**/*.exs', 'lib/exdock_client/config/**/*.exs', 'lib/exdock_client/exdock_protocol/lib/**/*.ex', 'lib/exdock_client_runtime/lib/**/*.ex') }}
       - run: |
           mix deps.get
+          (cd lib/exdock_client/exdock_protocol && mix deps.get)
           (cd lib/exdock_client_runtime && mix deps.get)
           (cd lib/exdock_client && mix deps.get)
       - name: Verify publisher safeguards
@@ -63,6 +64,7 @@ jobs:
           elixir-version: ${{ env.ELIXIR_VERSION }}
       - run: |
           mix deps.get
+          (cd lib/exdock_client/exdock_protocol && mix deps.get)
           (cd lib/exdock_client_runtime && mix deps.get)
           (cd lib/exdock_client && mix deps.get)
       - run: mix test.release

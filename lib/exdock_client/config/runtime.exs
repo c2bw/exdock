@@ -25,3 +25,7 @@ config :exdock_client, :recreation_readiness,
 request_timeout = Exdock.Protocol.ExecutionBudget.request_timeout()
 config :tesla, DockerEngineAPI.Connection, adapter: {Tesla.Adapter.Hackney, recv_timeout: request_timeout}
 config :ex_docker_api, base_url: "http+unix://%2Fvar%2Frun%2Fdocker.sock/", timeout: request_timeout
+
+# The server generates a self-signed certificate at startup. Deployments
+# authenticate the server path through the trusted network or VPN.
+config :exdock_client, :agent_tls_options, verify: :verify_none

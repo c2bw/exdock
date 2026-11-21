@@ -55,6 +55,26 @@ defmodule ExdockWeb.Telemetry do
         unit: {:native, :millisecond}
       ),
 
+      # Agent transport metrics
+      summary("node_wire.queue_wait.duration",
+        unit: {:native, :millisecond},
+        tags: [:role]
+      ),
+      summary("node_wire.callback.duration",
+        unit: {:native, :millisecond},
+        tags: [:role, :callback, :message_type]
+      ),
+      summary("node_wire.socket_write.duration",
+        unit: {:native, :millisecond},
+        tags: [:role, :message_type]
+      ),
+      summary("node_wire.message_received.bytes", tags: [:role, :message_type]),
+      summary("node_wire.socket_write.bytes", tags: [:role, :message_type]),
+      last_value("node_wire.callback.queue_depth", tags: [:role]),
+      last_value("node_wire.admission_accepted.pending_messages", tags: [:role]),
+      last_value("node_wire.admission_accepted.pending_bytes", tags: [:role]),
+      counter("node_wire.admission_rejected.count", tags: [:role, :reason]),
+
       # Database Metrics
       summary("exdock.repo.query.total_time",
         unit: {:native, :millisecond},

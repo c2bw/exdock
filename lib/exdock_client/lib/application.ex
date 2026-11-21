@@ -15,7 +15,7 @@ defmodule ExdockClient.Application do
   """
   def start(_type, _args) do
     package_version = Application.spec(:exdock_client, :vsn) |> to_string()
-    protocol_version = Exdock.Protocol.Contract.current_version()
+    protocol_version = Exdock.Wire.V1.version()
 
     Logger.info("Starting Exdock client package_version=#{package_version} protocol_version=#{protocol_version}")
 
@@ -40,7 +40,23 @@ defmodule ExdockClient.Application do
       {Registry, keys: :unique, name: Exdock.AgentRegistry},
       {Task.Supervisor, name: Exdock.Client.Connection.TaskSupervisor},
       Exdock.Client.Connection.RuntimeInstaller,
-      {Exdock.Client.Connection.TCPClient, {node_name, server_host, server_port, auth_key}}
+      {DynamicSupervisor, strategy: :one_for_one, name: Exdock.Client.Connection.RuntimeBridges},
+      {NodeWire.Client,
+       name: Exdock.AgentConnection,
+       protocols: [Exdock.Wire.V1],
+       handler: Exdock.Client.Connection.Native.Handler,
+       handler_args: %{node: node_name, token: :crypto.hash(:sha256, auth_key) |> Base.encode16()},
+       transport:
+         {:tls,
+          [
+            host: server_host,
+            port: server_port,
+            options: Application.fetch_env!(:exdock_client, :agent_tls_options)
+          ]},
+       phases: Exdock.Wire.Phases.client(),
+       reconnect_policy: %{runtime_busy: :transient},
+       handshake: [required_capabilities: ["jobs.v1"]],
+       readiness_timeout_ms: 35_000}
     ]
 
     opts = [strategy: :one_for_one, name: ExdockClient.Supervisor]

@@ -8,26 +8,122 @@ defmodule Exdock.DockerTest.Driver do
     File.mkdir_p!(directory)
 
     images =
-      for {kind, tag} <- [{"server", "suite-server:local"}, {"agent", "suite-agent:local"}], into: %{} do
+      for {kind, tag} <- [{"server", "suite-server:local"}, {"agent", "suite-agent:local"}],
+          into: %{} do
         [image] = H.docker!(context, ["image", "inspect", tag]) |> JSON.decode!()
         {kind, %{"local_tag" => tag, "id" => image["Id"], "labels" => image["Config"]["Labels"]}}
       end
 
     H.docker!(
       context,
-      ["image", "save", "--output", Path.join(directory, "images.tar"), "suite-server:local", "suite-agent:local"],
+      [
+        "image",
+        "save",
+        "--output",
+        Path.join(directory, "images.tar"),
+        "suite-server:local",
+        "suite-agent:local"
+      ],
       180
     )
 
     File.write!(Path.join(directory, "images.json"), JSON.encode!(images) <> "\n")
 
-    case System.cmd("python3", ["scripts/publish_release.py", "--record-image-identities", directory], stderr_to_stdout: true) do
-      {_output, 0} -> :ok
-      {output, status} -> raise "Recording exported image identities failed (#{status}): #{output}"
+    case System.cmd(
+           "python3",
+           ["scripts/publish_release.py", "--record-image-identities", directory],
+           stderr_to_stdout: true
+         ) do
+      {_output, 0} ->
+        :ok
+
+      {output, status} ->
+        raise "Recording exported image identities failed (#{status}): #{output}"
     end
 
-    File.cp!(Path.join(context.artifacts, "engine.txt"), Path.join(directory, "tested-engine.txt"))
+    File.cp!(
+      Path.join(context.artifacts, "engine.txt"),
+      Path.join(directory, "tested-engine.txt")
+    )
+
     IO.puts("Exported passing production images to #{directory}")
+  end
+
+  defp native_tls_fixture!(context) do
+    dir = Path.join(context.artifacts, "tls")
+    File.mkdir_p!(dir)
+    ca = Path.join(dir, "ca.pem")
+    ca_key = Path.join(dir, "ca.key")
+    key = Path.join(dir, "server.key")
+    csr = Path.join(dir, "server.csr")
+    cert = Path.join(dir, "server.pem")
+    ext = Path.join(dir, "extensions")
+
+    File.write!(
+      ext,
+      "subjectAltName=DNS:suite-server\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
+    )
+
+    commands = [
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        ca_key,
+        "-out",
+        ca,
+        "-days",
+        "2",
+        "-subj",
+        "/CN=NodeWire Docker Test CA",
+        "-addext",
+        "basicConstraints=critical,CA:TRUE"
+      ],
+      [
+        "req",
+        "-new",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        key,
+        "-out",
+        csr,
+        "-subj",
+        "/CN=suite-server"
+      ],
+      [
+        "x509",
+        "-req",
+        "-in",
+        csr,
+        "-CA",
+        ca,
+        "-CAkey",
+        ca_key,
+        "-CAcreateserial",
+        "-out",
+        cert,
+        "-days",
+        "2",
+        "-extfile",
+        ext
+      ]
+    ]
+
+    Enum.each(commands, fn args ->
+      case System.cmd("openssl", args, stderr_to_stdout: true) do
+        {_, 0} -> :ok
+        _ -> raise "Could not issue Docker test TLS identity"
+      end
+    end)
+
+    # The nonroot test container reads these ephemeral fixtures after docker cp.
+    File.chmod!(key, 0o644)
+    %{ca: ca, cert: cert, key: key}
   end
 
   defp verify_packaging!(context, image) do
@@ -57,7 +153,10 @@ defmodule Exdock.DockerTest.Driver do
   end
 
   def start_release!(context) do
-    for {image, file} <- [{"suite-server:local", "Dockerfile"}, {"suite-agent:local", "lib/exdock_client/Dockerfile"}] do
+    for {image, file} <- [
+          {"suite-server:local", "Dockerfile"},
+          {"suite-agent:local", "lib/exdock_client/Dockerfile"}
+        ] do
       IO.puts("Building production release #{image}; output is recorded in commands.log")
 
       H.setup_command!(
@@ -82,13 +181,13 @@ defmodule Exdock.DockerTest.Driver do
       verify_packaging!(context, image)
     end
 
+    trust = native_tls_fixture!(context)
     auth = Base.encode64(:crypto.strong_rand_bytes(32))
     secret = Base.encode64(:crypto.strong_rand_bytes(64))
     vault = Base.encode64(:crypto.strong_rand_bytes(32))
 
     H.docker!(context, [
-      "run",
-      "-d",
+      "create",
       "--name",
       "suite-server",
       "--network",
@@ -97,6 +196,10 @@ defmodule Exdock.DockerTest.Driver do
       "exdock.protected=true",
       "-e",
       "AUTH_KEY=#{auth}",
+      "-e",
+      "NODEWIRE_CERT_FILE=/tmp/nodewire-server.pem",
+      "-e",
+      "NODEWIRE_KEY_FILE=/tmp/nodewire-server.key",
       "-e",
       "SECRET_KEY_BASE=#{secret}",
       "-e",
@@ -112,6 +215,10 @@ defmodule Exdock.DockerTest.Driver do
       "suite-server:local"
     ])
 
+    H.docker!(context, ["cp", trust.cert, "suite-server:/tmp/nodewire-server.pem"])
+    H.docker!(context, ["cp", trust.key, "suite-server:/tmp/nodewire-server.key"])
+    H.docker!(context, ["start", "suite-server"])
+
     H.eventually!(
       fn ->
         case rpc(context, "true", 10) do
@@ -124,8 +231,7 @@ defmodule Exdock.DockerTest.Driver do
     )
 
     H.docker!(context, [
-      "run",
-      "-d",
+      "create",
       "--name",
       "suite-agent",
       "--network",
@@ -141,6 +247,8 @@ defmodule Exdock.DockerTest.Driver do
       "-e",
       "SERVER_HOST=suite-server",
       "-e",
+      "NODEWIRE_CA_FILE=/tmp/nodewire-ca.pem",
+      "-e",
       "SERVER_PORT=5000",
       "-e",
       "RELEASE_DISTRIBUTION=sname",
@@ -151,9 +259,16 @@ defmodule Exdock.DockerTest.Driver do
       "suite-agent:local"
     ])
 
+    H.docker!(context, ["cp", trust.ca, "suite-agent:/tmp/nodewire-ca.pem"])
+    H.docker!(context, ["start", "suite-agent"])
+
     H.eventually!(
       fn ->
-        case rpc(context, "\"docker-test-node\" in Exdock.Runtime.Coordinator.query({:page, []}).nodes_list", 10) do
+        case rpc(
+               context,
+               "\"docker-test-node\" in Exdock.Runtime.Coordinator.query({:page, []}).nodes_list",
+               10
+             ) do
           {:ok, true} -> {:ok, true}
           _ -> false
         end
@@ -186,17 +301,33 @@ defmodule Exdock.DockerTest.Driver do
   def command(context, :release, action, target) do
     # Resolve current Docker facts through the real refresh command before
     # constructing a state-aware command, just as the application does.
-    :ok = submit!(context, "Exdock.Runtime.Command.Cluster.refresh_node(\"docker-test-node\", :hidden)")
+    :ok =
+      submit!(
+        context,
+        "Exdock.Runtime.Command.Cluster.refresh_node(\"docker-test-node\", :hidden)"
+      )
+
     target = inspect(target)
 
     command =
       case action do
-        :start -> "Exdock.Runtime.Command.Container.start(\"docker-test-node\", #{target})"
-        :stop -> "Exdock.Runtime.Command.Container.stop(\"docker-test-node\", #{target})"
-        :restart -> "Exdock.Runtime.Command.Container.restart(\"docker-test-node\", #{target})"
-        :pull -> "Exdock.Runtime.Command.Image.pull([%{node: \"docker-test-node\", image_tag: #{target}}])"
-        :recreate -> "Exdock.Runtime.Command.Container.recreate([{\"docker-test-node\", #{target}}], false)"
-        :update -> "Exdock.Runtime.Command.Container.recreate([{\"docker-test-node\", #{target}}], true)"
+        :start ->
+          "Exdock.Runtime.Command.Container.start(\"docker-test-node\", #{target})"
+
+        :stop ->
+          "Exdock.Runtime.Command.Container.stop(\"docker-test-node\", #{target})"
+
+        :restart ->
+          "Exdock.Runtime.Command.Container.restart(\"docker-test-node\", #{target})"
+
+        :pull ->
+          "Exdock.Runtime.Command.Image.pull([%{node: \"docker-test-node\", image_tag: #{target}}])"
+
+        :recreate ->
+          "Exdock.Runtime.Command.Container.recreate([{\"docker-test-node\", #{target}}], false)"
+
+        :update ->
+          "Exdock.Runtime.Command.Container.recreate([{\"docker-test-node\", #{target}}], true)"
       end
 
     submit!(context, command)
@@ -237,7 +368,12 @@ defmodule Exdock.DockerTest.Driver do
   end
 
   def recreate_then_stop(context, target) do
-    :ok = submit!(context, "Exdock.Runtime.Command.Cluster.refresh_node(\"docker-test-node\", :hidden)")
+    :ok =
+      submit!(
+        context,
+        "Exdock.Runtime.Command.Cluster.refresh_node(\"docker-test-node\", :hidden)"
+      )
+
     target = inspect(target)
 
     submit!(context, [
@@ -266,7 +402,13 @@ defmodule Exdock.DockerTest.Driver do
       "active recreation before disconnect"
     )
 
-    {:ok, _} = agent_rpc(context, ":ssl.close(:sys.get_state(Exdock.Client.Connection.TCPClient).socket); true", 10)
+    {:ok, _} =
+      agent_rpc(
+        context,
+        "conn = NodeWire.Client.status(Exdock.AgentConnection).connection; Process.exit(conn.owner, :kill); true",
+        10
+      )
+
     result = Task.await(task, 30_000)
 
     H.eventually!(
@@ -280,7 +422,11 @@ defmodule Exdock.DockerTest.Driver do
 
     H.eventually!(
       fn ->
-        case rpc(context, "\"docker-test-node\" in Exdock.Runtime.Coordinator.query({:page, []}).nodes_list", 10) do
+        case rpc(
+               context,
+               "\"docker-test-node\" in Exdock.Runtime.Coordinator.query({:page, []}).nodes_list",
+               10
+             ) do
           {:ok, true} -> {:ok, true}
           _ -> false
         end
@@ -312,11 +458,15 @@ defmodule Exdock.DockerTest.Driver do
     )
   end
 
-  def rpc(context, code, timeout), do: release_rpc(context, "suite-server", "exdock", "Jason", code, timeout)
-  def agent_rpc(context, code, timeout), do: release_rpc(context, "suite-agent", "exdock_client", "JSON", code, timeout)
+  def rpc(context, code, timeout),
+    do: release_rpc(context, "suite-server", "exdock", "Jason", code, timeout)
+
+  def agent_rpc(context, code, timeout),
+    do: release_rpc(context, "suite-agent", "exdock_client", "JSON", code, timeout)
 
   defp release_rpc(context, container, release, encoder, code, timeout) do
-    expression = "value = (#{code}); IO.puts(\"EXDOCK_TEST_RESULT:\" <> #{encoder}.encode!(value))"
+    expression =
+      "value = (#{code}); IO.puts(\"EXDOCK_TEST_RESULT:\" <> #{encoder}.encode!(value))"
 
     case H.docker(context, ["exec", container, "/app/bin/#{release}", "rpc", expression], timeout) do
       {output, 0} ->

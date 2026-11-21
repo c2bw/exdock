@@ -7,14 +7,53 @@ defmodule Exdock.ClientLib.AsyncBatchSchedulerTest do
   setup context do
     start_supervised!({Task.Supervisor, name: Exdock.Client.Connection.TaskSupervisor})
 
+    options = if Map.has_key?(context, :max_concurrency), do: [max_concurrency: context.max_concurrency], else: []
+
     scheduler =
       start_supervised!(%{
         id: AsyncBatchScheduler,
-        start:
-          {AsyncBatchScheduler, :start_link, [{"node-a", self(), Wire}, [max_concurrency: Map.get(context, :max_concurrency, 8)]]}
+        start: {AsyncBatchScheduler, :start_link, [{"node-a", self(), Wire}, options]}
       })
 
     %{scheduler: scheduler}
+  end
+
+  test "the default pool starts 64 containers together and queues overflow", %{scheduler: scheduler} do
+    owner = self()
+
+    for id <- 1..65 do
+      sample = fn ->
+        send(owner, {:started, id, self()})
+
+        receive do
+          :finish -> {:ok, %{}}
+        end
+      end
+
+      add(scheduler, Integer.to_string(id), 1, sample)
+    end
+
+    workers =
+      for _ <- 1..64 do
+        assert_receive {:started, id, worker}, 1000
+        {id, worker}
+      end
+
+    assert workers |> Enum.map(&elem(&1, 0)) |> Enum.sort() == Enum.to_list(1..64)
+    assert map_size(:sys.get_state(scheduler).samples) == 64
+    refute_receive {:started, 65, _}, 20
+
+    [{first_id, first_worker} | remaining] = workers
+    send(first_worker, :finish)
+    assert_sample(Integer.to_string(first_id))
+    assert_receive {:started, 65, overflow_worker}, 1000
+    assert map_size(:sys.get_state(scheduler).samples) == 64
+
+    for {_id, worker} <- remaining, do: send(worker, :finish)
+    send(overflow_worker, :finish)
+    for {id, _worker} <- remaining, do: assert_sample(Integer.to_string(id))
+    assert_sample("65")
+    assert :sys.get_state(scheduler).samples == %{}
   end
 
   test "slow samples serialize while other containers continue", %{scheduler: scheduler} do

@@ -98,6 +98,19 @@ defmodule Exdock.Server.Connection.Protocol do
 
   defp decode_payload(_message_type, _payload, _trust), do: {:error, :malformed_message}
 
+  @doc "Validates an already decoded native payload using the existing DTO mappings."
+  def validate_payload(:progress, payload) do
+    if Message.valid_progress?(payload), do: progress_message(payload), else: {:error, :invalid_progress}
+  end
+
+  def validate_payload(:result, payload) do
+    if Message.valid_result?(payload), do: result_message(payload), else: {:error, :invalid_result}
+  end
+
+  def validate_payload(:resource_sample, payload) do
+    if Message.valid_resource_sample?(payload), do: resource_message(payload), else: {:error, :invalid_sample}
+  end
+
   defp progress_message(%{"id" => id, "kind" => kind, "node" => node, "data" => data}) do
     with {:ok, node} <- NodeId.normalize(node) do
       {:ok, WireMessage.progress(id, kind, node, data)}

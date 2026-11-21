@@ -1,5 +1,10 @@
 defmodule Exdock.ClientLib.AsyncBatchScheduler do
-  @moduledoc false
+  @moduledoc """
+  Samples container resources concurrently with a bounded worker pool.
+
+  The default covers up to 64 containers in one sampling round so Docker's
+  statistics collection interval does not create long queues on larger nodes.
+  """
 
   use GenServer
   require Logger
@@ -8,12 +13,14 @@ defmodule Exdock.ClientLib.AsyncBatchScheduler do
   alias Exdock.ClientLib.Async.Scheduler
   alias Exdock.Protocol.Message, as: ProtocolMessage
 
+  @default_max_concurrency 64
+
   defstruct node: nil,
             owner: nil,
             wire: nil,
             async_jobs: nil,
             samples: %{},
-            max_concurrency: 8,
+            max_concurrency: @default_max_concurrency,
             pending: :queue.new(),
             queued: MapSet.new()
 
@@ -29,7 +36,7 @@ defmodule Exdock.ClientLib.AsyncBatchScheduler do
         }
 
   def start_link(args, opts \\ []) do
-    {limit, opts} = Keyword.pop(opts, :max_concurrency, 8)
+    {limit, opts} = Keyword.pop(opts, :max_concurrency, @default_max_concurrency)
     {node, owner, wire} = args
     GenServer.start_link(__MODULE__, {node, owner, wire, limit}, Keyword.put_new(opts, :name, __MODULE__))
   end

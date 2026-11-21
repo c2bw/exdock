@@ -45,6 +45,9 @@
 # Mix artifacts
 /_build/
 /deps/
+# Nested Mix project caches must also be fetched/built inside the image.
+**/_build/
+**/deps/
 *.ez
 
 # Generated on crash by the VM

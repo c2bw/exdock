@@ -2,7 +2,7 @@ defmodule Exdock.Build.ProjectConfig do
   @moduledoc false
 
   @release_tracks %{
-    control_plane: %{version: "0.1.1", elixir: "~> 1.20"},
+    control_plane: %{version: "0.2.0", elixir: "~> 1.20"},
     runtime_protocol: %{version: "0.1.0", elixir: "~> 1.18"}
   }
 

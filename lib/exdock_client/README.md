@@ -4,7 +4,7 @@ Standalone client release for an Exdock node.
 
 The client connects to the Exdock server over SSL, authenticates with the shared
 `AUTH_KEY`, validates and loads a SHA-256-protected runtime bundle, and executes
-only protocol-v4 commands through the fixed `Exdock.AgentRuntime` entrypoint.
+only validated NodeWire commands through the fixed `Exdock.AgentRuntime` entrypoint.
 The server cannot request arbitrary module/function execution.
 
 ## Configuration
@@ -47,17 +47,15 @@ host:5000
 
 ## TLS And Trust
 
-The client currently opens an SSL connection with certificate verification
-disabled (`verify: :verify_none`). This is intentional for the current
-deployment model: a trusted private network or authenticated overlay controls
-which server endpoint the client can reach. The shared `AUTH_KEY` authenticates
-the client to the server; it does not authenticate the server to the client.
+The server generates a fresh self-signed certificate at startup. The agent
+accepts that certificate with `verify: :verify_none` and requires no CA file.
+An optional server certificate and key can be supplied through
+`NODEWIRE_CERT_FILE` and `NODEWIRE_KEY_FILE`.
 
-Operationally, this means the SSL connection encrypts traffic, but the client
-does not verify the server certificate identity. Run clients only on trusted
-networks or behind infrastructure that already authenticates the server path.
-The accepted-risk boundary and conditions that require certificate verification
-are defined in the
+TLS encrypts the connection. Deploy agents on a trusted private network or
+authenticated VPN that establishes the server's identity. The shared
+`AUTH_KEY` authenticates the agent to the server. The deployment assumptions
+are documented in the
 [unverified TLS accepted-risk specification](../../docs/UNVERIFIED_TLS_ACCEPTED_RISK_SPEC.md).
 
 ## Development

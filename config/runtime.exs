@@ -170,3 +170,10 @@ if config_env() == :prod do
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
 end
+
+# Optional agent-listener identity. Without these files, the server generates
+# a self-signed certificate at startup.
+if cert = System.get_env("NODEWIRE_CERT_FILE") do
+  key = System.fetch_env!("NODEWIRE_KEY_FILE")
+  config :exdock, :agent_tls_options, certfile: String.to_charlist(cert), keyfile: String.to_charlist(key)
+end

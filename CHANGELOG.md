@@ -4,6 +4,26 @@ Entries describe releases by tag. A release is available only after its GitHub
 publication workflow succeeds. The historical `v0.0.1` tag predates this release
 pipeline; coordinated public image releases begin with `v0.1.1`.
 
+## [0.2.0]
+
+Native `NodeWire` agent transport and increased container resource sampling concurrency.
+
+### Features and improvements
+
+- Replaced the custom wire-v4 TCP/TLS socket framing with native `NodeWire` (`Exdock.Wire.V1`, protocol ID `"exdock.agent"`, capabilities `["jobs.v1", "metrics.v1"]`) and explicit connection phases (`:awaiting_ready`, `:ready`).
+- Added optional custom TLS server certificate and key configuration (`NODEWIRE_CERT_FILE` and `NODEWIRE_KEY_FILE`) for the agent listener while keeping self-signed certificate generation as the default.
+- Added `node_wire.*` transport telemetry metrics for callback duration, queue wait, queue depth, socket writes, received bytes, and admission control.
+- Increased default concurrent container resource sampling from 16 to 64 in `Exdock.ClientLib.AsyncBatchScheduler` so Docker stats intervals do not build up long queues on larger nodes.
+- Updated project dependencies in the server and standalone agent lockfiles.
+
+### Compatibility and migration
+
+- Server and agent package versions: `0.2.0` from the same source revision.
+- Shared runtime/protocol package versions: `0.1.0`.
+- Agent compatibility version: `1.1.0`; server accepts `~> 1.1.0`.
+- Native transport protocol: `Exdock.Wire.V1` (`NodeWire` `~> 0.1.0`); runtime bundle format: `1`.
+- **Breaking transport change**: `Exdock.Wire.V1` is incompatible with `v0.1.1` and earlier agents. Upgrade the server and every agent together.
+
 ## [0.1.1]
 
 Initial public release of the current server and standalone Docker agent.

@@ -6,15 +6,16 @@ defmodule Exdock.Server.Connection.RestartRecoveryTest do
   alias Exdock.Server
   alias Exdock.Server.Connection
   alias Connection.TCPServer
-  alias TCPServer.{ClientRegistry, HandlerSupervisor}
+  alias TCPServer.ClientRegistry
   alias Exdock.Server.Jobs
   alias Exdock.Server.State.Storage
-  alias Exdock.TestSupport.ConnectionCommandHandler
 
   for failed_child <- [ClientRegistry, TCPServer] do
     @failed_child failed_child
     test "recovers online nodes and pending jobs after #{inspect(failed_child)} crashes" do
-      coordinator = start_supervised!({Server, email: "recovery@example.com", plain_password: "test-password-123"})
+      coordinator =
+        start_supervised!({Server, email: "recovery@example.com", plain_password: "test-password-123"})
+
       :ok = Phoenix.PubSub.subscribe(Exdock.PubSub, "nodechange")
       supervisor = start_supervised!({Connection.Supervisor, {"recovery-auth", available_port()}})
       _ = :sys.get_state(coordinator)
@@ -25,12 +26,13 @@ defmodule Exdock.Server.Connection.RestartRecoveryTest do
         %{state | cluster: %{state.cluster | storage: storage}}
       end)
 
-      {:ok, handler} = DynamicSupervisor.start_child(HandlerSupervisor, {ConnectionCommandHandler, {:accept, self()}})
-      :ok = ClientRegistry.register("node-a", handler)
-      detail = remote_detail(:container_start, "node-a")
+      client = start_agent()
+      assert_receive {:nodechange, :up, "node-a"}, 2000
+      handler = NodeWire.Client.status(client).connection.owner
+      detail = Jobs.Detail.new(:container_start, Jobs.Spec.new(Jobs.Spec.Remote.new("node-a"), ["container-1"], nil))
       Jobs.add(detail, jobs_server())
       job_id = detail.id
-      assert_receive {:command_accepted, %Jobs.Job{id: ^job_id}}, 1_000
+      assert_receive {:command_accepted, %{"id" => ^job_id}}, 1_000
 
       failed = Process.whereis(@failed_child)
       monitor = Process.monitor(handler)
@@ -39,7 +41,7 @@ defmodule Exdock.Server.Connection.RestartRecoveryTest do
       assert_receive {:trace, ^supervisor, :spawn, replacement, _}, 1_000
       _ = :sys.get_state(replacement)
       :erlang.trace(supervisor, false, [:procs])
-      assert_receive {:DOWN, ^monitor, :process, ^handler, :shutdown}, 1_000
+      assert_receive {:DOWN, ^monitor, :process, ^handler, _}, 1_000
       assert_receive {:nodechange, :down, "node-a"}, 1_000
 
       assert_receive %Jobs.Event{
@@ -49,17 +51,37 @@ defmodule Exdock.Server.Connection.RestartRecoveryTest do
                      1_000
 
       assert Storage.Nodes.list(:sys.get_state(coordinator).cluster.storage) == []
-      assert Jobs.State.get_job_info(:sys.get_state(GenServer.whereis(jobs_server())).domain, job_id) == nil
+
+      assert Jobs.State.get_job_info(
+               :sys.get_state(GenServer.whereis(jobs_server())).domain,
+               job_id
+             ) == nil
 
       # Querying the supervisor waits until all replacement children are started.
       _ = Supervisor.which_children(supervisor)
-      {:ok, new_handler} = DynamicSupervisor.start_child(HandlerSupervisor, {ConnectionCommandHandler, {:accept, self()}})
-      assert :ok = ClientRegistry.register("node-a", new_handler)
-      send(TCPServer, {:client_ready, new_handler, "node-a", %{"platform" => "linux/amd64"}})
+      NodeWire.Client.reconnect(client)
       assert_receive {:nodechange, :up, "node-a"}, 1_000
       assert Storage.Nodes.get(:sys.get_state(coordinator).cluster.storage, "node-a")
       assert Process.whereis(Coordinator) == coordinator
     end
+  end
+
+  defp start_agent do
+    start_supervised!(
+      {NodeWire.Client,
+       protocols: [Exdock.Wire.V1],
+       handler: Exdock.TestSupport.NativeAgent,
+       handler_args: self(),
+       phases: Exdock.Wire.Phases.client(),
+       reconnect: [enabled: false],
+       transport:
+         {:tls,
+          [
+            host: "localhost",
+            port: NodeWire.Server.port(Exdock.AgentServer),
+            options: [verify: :verify_none]
+          ]}}
+    )
   end
 
   defp available_port do

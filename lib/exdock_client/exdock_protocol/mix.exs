@@ -14,7 +14,7 @@ defmodule ExdockProtocol.MixProject do
     ProjectConfig.project(:exdock_protocol, :runtime_protocol,
       start_permanent: false,
       aliases: aliases(),
-      deps: [{:node_wire, git: "https://git.lan.mangekyo.live/scorpion/nodewire"}]
+      deps: [{:node_wire, "~> 0.1.0"},]
     )
   end
 

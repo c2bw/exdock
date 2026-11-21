@@ -121,7 +121,8 @@ defmodule Exdock.Server.Connection.TCPServer do
   def handle_info({:nodewire, :ready, conn, _}, s),
     do: {:noreply, native_ready(%{s | native_ready: Map.put(s.native_ready, conn.id, conn)}, conn.id)}
 
-  def handle_info({:nodewire, :disconnected, conn, _}, s) do
+  def handle_info({:nodewire, :disconnected, conn, reason}, s) do
+    Logger.info("Agent [#{conn.identity}] disconnected: #{inspect(reason)}")
     ClientLifecycle.disconnected(conn.identity)
     {:noreply, %{s | native_metadata: Map.delete(s.native_metadata, conn.id), native_ready: Map.delete(s.native_ready, conn.id)}}
   end

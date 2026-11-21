@@ -1,6 +1,7 @@
 # Coordinated releases
 
-The first prepared public release is `v0.1.1`. Preparing files does not create a
+The current prepared public release is `v0.2.0` (coordinated public image releases
+began with `v0.1.1`). Preparing files does not create a
 Git tag, GitHub release, or public container package. The destination GitHub
 repository and its package settings must exist before publication.
 
@@ -9,11 +10,11 @@ repository and its package settings must exist before publication.
 A public release identifies a server/agent pair from one source commit. Package,
 wire, and agent-compatibility versions are separate contracts:
 
-| Component | v0.1.1 value | Source of truth |
+| Component | v0.2.0 value | Source of truth |
 | --- | --- | --- |
-| Server and standalone agent packages | `0.1.1` | `build/project_config.exs`, control-plane track |
+| Server and standalone agent packages | `0.2.0` | `build/project_config.exs`, control-plane track |
 | Shared runtime and protocol packages | `0.1.0` | `build/project_config.exs`, runtime/protocol track |
-| Wire protocol | `4` | `Exdock.Protocol.Compatibility` |
+| Wire protocol | `4` (`Exdock.Wire.V1` on `NodeWire`) | `Exdock.Protocol.Compatibility` / `Exdock.Wire.V1` |
 | Agent compatibility version / server range | `1.1.0` / `~> 1.1.0` | `Exdock.Protocol.Compatibility` |
 | Runtime-bundle format | `1` | `Exdock.Protocol.Compatibility` |
 
@@ -54,8 +55,8 @@ on GitHub-hosted Ubuntu runners.
 6. Once that dry run passes, create and push the annotated release tag:
 
    ```sh
-   git tag -a v0.1.1 -m "Exdock v0.1.1"
-   git push github v0.1.1
+   git tag -a v0.2.0 -m "Exdock v0.2.0"
+   git push github v0.2.0
    ```
 
    `github` here is the remote for the destination GitHub repository, not
@@ -86,8 +87,8 @@ same exported image. `images.json` also retains the test daemon's native ID as
 For a GitHub repository `OWNER/REPOSITORY`, lowercased image references are:
 
 ```text
-ghcr.io/owner/repository:v0.1.1
-ghcr.io/owner/repository_client:v0.1.1
+ghcr.io/owner/repository:v0.2.0
+ghcr.io/owner/repository_client:v0.2.0
 ```
 
 Both images also receive `sha-FULL_SOURCE_COMMIT` tags. After both version tags
@@ -136,7 +137,7 @@ GitHub repository's lowercase owner/name:
 
 ```dotenv
 EXDOCK_IMAGE_PREFIX=ghcr.io/owner/repository
-EXDOCK_RELEASE_TAG=v0.1.1
+EXDOCK_RELEASE_TAG=v0.2.0
 ```
 
 Then run:

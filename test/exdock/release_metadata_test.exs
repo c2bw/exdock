@@ -10,8 +10,8 @@ defmodule Exdock.ReleaseMetadataTest do
   test "records actual package and protocol versions with pinned bases", %{directory: directory} do
     assert {_output, 0} = prepare(directory, "refs/heads/main")
     metadata = directory |> Path.join("release.json") |> File.read!() |> JSON.decode!()
-    assert metadata["tag"] == "v0.1.1"
-    assert metadata["packages"] == %{"server" => "0.1.1", "agent" => "0.1.1", "runtime" => "0.1.0", "protocol" => "0.1.0"}
+    assert metadata["tag"] == "v0.2.0"
+    assert metadata["packages"] == %{"server" => "0.2.0", "agent" => "0.2.0", "runtime" => "0.1.0", "protocol" => "0.1.0"}
 
     assert metadata["compatibility"] == %{
              "wire" => 4,
@@ -21,16 +21,16 @@ defmodule Exdock.ReleaseMetadataTest do
            }
 
     assert metadata["platform"] == "linux/amd64"
-    assert metadata["image_tags"]["server"] == "ghcr.io/example/exdock:v0.1.1"
+    assert metadata["image_tags"]["server"] == "ghcr.io/example/exdock:v0.2.0"
     assert metadata["base_images"]["BUILDER_IMAGE"] =~ "@sha256:"
     assert metadata["base_images"]["RUNNER_IMAGE"] =~ "@sha256:"
-    assert File.read!(Path.join(directory, "release-notes.md")) =~ "Initial public release"
+    assert File.read!(Path.join(directory, "release-notes.md")) =~ "Native `NodeWire` agent transport"
   end
 
   test "rejects a tag that disagrees with the packages", %{directory: directory} do
     assert {output, status} = prepare(directory, "refs/tags/v9.9.9")
     assert status != 0
-    assert output =~ "Release tag must be v0.1.1"
+    assert output =~ "Release tag must be v0.2.0"
     refute File.exists?(Path.join(directory, "release.json"))
   end
 

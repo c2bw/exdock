@@ -51,7 +51,7 @@ server/agent tag to `.env`, for example:
 
 ```dotenv
 EXDOCK_IMAGE_PREFIX=ghcr.io/c2bw/exdock
-EXDOCK_RELEASE_TAG=v0.1.1
+EXDOCK_RELEASE_TAG=v0.2.0
 ```
 
 The version above is an example; use an available release from your registry.
@@ -202,6 +202,7 @@ optional variable to `.env` also requires an entry in the service configuration.
 | `TZ` | Server timezone; default: `Etc/UTC`. |
 | `TRUSTED_PROXY_IPS` | Optional comma-separated proxy IPs trusted for forwarded login addresses. |
 | `GITHUB_API_TOKEN`, `LOKI_URL` | Optional GitHub release-lookup token and Loki logging endpoint. |
+| `NODEWIRE_CERT_FILE`, `NODEWIRE_KEY_FILE` | Optional server certificate and private key paths for the agent TLS listener. |
 | `RECREATE_READINESS_TIMEOUT_MS` | Agent recreation-readiness deadline; default: `30000`, `0` disables verification. |
 
 The example fixes the database path at `/data/db/exdock.db` and the agent port

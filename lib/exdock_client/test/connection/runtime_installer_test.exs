@@ -125,11 +125,12 @@ defmodule Exdock.Client.Connection.RuntimeInstallerTest do
 
       task =
         Task.Supervisor.async_nolink(Exdock.Client.Connection.TaskSupervisor, fn ->
-          {:ok, _} = Registry.register(Exdock.AgentRegistry, {:command_worker, self()}, nil)
+          key = {:command_worker, self()}
+          {:ok, _} = Registry.register(Exdock.AgentRegistry, key, nil)
           send(owner, :worker_started)
 
           receive do
-            :finish -> :ok
+            :finish -> Registry.unregister(Exdock.AgentRegistry, key)
           end
         end)
 
